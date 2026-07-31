@@ -22,7 +22,7 @@ import json
 import sys
 import time
 
-import anthropic
+import httpx
 
 from config import (ANTHROPIC_API_KEY, BASE_URL, REMITENTE_NOMBRE,
                     REMITENTE_EMAIL, EMPRESA_LEGAL, NICHOS, nicho_config)
@@ -251,7 +251,10 @@ def construir_html(cuerpo: str, baja_url: str, nicho: str, negocio: str,
     )
 
 
-def redactar(cliente: anthropic.Anthropic, lead: dict) -> dict | None:
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+
+
+def redactar(lead: dict) -> dict | None:
     cfg = NICHOS.get(lead.get("nicho") or "restaurantes",
                      NICHOS["restaurantes"])
     system = SYSTEM_BASE.format(sector=cfg["nombre"],
@@ -266,28 +269,44 @@ def redactar(cliente: anthropic.Anthropic, lead: dict) -> dict | None:
         "pain_points_detectados": cargar_json(lead.get("pain_points")) or [],
         "auditoria_tecnica": cargar_json(lead.get("auditoria")) or {},
     }
-    try:
-        r = cliente.messages.create(
-            model=MODELO,
-            max_tokens=700,
-            system=system,
-            messages=[{
-                "role": "user",
-                "content": ("Redacta el email para este negocio. "
-                            "Datos reales de la auditoría:\n"
-                            + json.dumps(contexto, ensure_ascii=False, indent=2)),
-            }],
-        )
-        texto = r.content[0].text.strip()
-        if texto.startswith("```"):
-            texto = texto.strip("`").removeprefix("json").strip()
-        datos = json.loads(texto)
-        if not datos.get("asunto") or not datos.get("cuerpo"):
+    payload = {
+        "model": MODELO,
+        "max_tokens": 700,
+        "system": system,
+        "messages": [{
+            "role": "user",
+            "content": ("Redacta el email para este negocio. "
+                        "Datos reales de la auditoría:\n"
+                        + json.dumps(contexto, ensure_ascii=False, indent=2)),
+        }],
+    }
+    headers = {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    # Reintentos con espera creciente por si la conexión es intermitente
+    for intento in range(3):
+        try:
+            with httpx.Client(timeout=45) as cliente:
+                r = cliente.post(ANTHROPIC_URL, headers=headers, json=payload)
+            if r.status_code == 200:
+                texto = r.json()["content"][0]["text"].strip()
+                if texto.startswith("```"):
+                    texto = texto.strip("`").removeprefix("json").strip()
+                datos = json.loads(texto)
+                if datos.get("asunto") and datos.get("cuerpo"):
+                    return datos
+                return None
+            if r.status_code in (429, 529) or r.status_code >= 500:
+                time.sleep(2 * (intento + 1))  # sobrecarga: reintenta
+                continue
+            print(f"  [ERROR HTTP {r.status_code}] {r.text[:160]}")
             return None
-        return datos
-    except (anthropic.APIError, json.JSONDecodeError, IndexError) as e:
-        print(f"  [ERROR] {type(e).__name__}: {e}")
-        return None
+        except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError) as e:
+            print(f"  [ERROR {type(e).__name__}: {e}] intento {intento + 1}/3")
+            time.sleep(2 * (intento + 1))
+    return None
 
 
 def main(nicho: str | None = None):
@@ -299,13 +318,13 @@ def main(nicho: str | None = None):
     if nicho:
         nicho_config(nicho)
 
-    cliente = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    cliente_dummy = None
     pendientes = [l for l in leads_por_estado("auditado", nicho=nicho)
                   if l.get("email")]
     print(f"Leads pendientes de redacción: {len(pendientes)}")
 
     for i, lead in enumerate(pendientes, 1):
-        datos = redactar(cliente, lead)
+        datos = redactar(lead)
         if not datos:
             print(f"[{i}/{len(pendientes)}] {lead['nombre'][:40]:40} -> FALLO, reintenta luego")
             continue
