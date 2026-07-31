@@ -338,46 +338,59 @@ def panel():
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KD Radar · CRM</title>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Inter+Tight:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--navy:#0A1628;--gold:#D4AF37;--gold2:#b8912e;--cream:#f4eede;--card:#101d33;--line:#22314e;--txt:#e9ecf3;--mut:#8d97ab}
+:root{--navy:#0A1628;--gold:#D4AF37;--gold2:#b8912e;--cream:#f4eede;--card:#101d33;--card2:#0d1829;--line:#22314e;--txt:#e9ecf3;--mut:#8d97ab;--green:#3fae6a;--blue:#5fa8e0;--red:#e08585}
 *{box-sizing:border-box;margin:0}
 body{background:var(--navy);color:var(--txt);font-family:'Inter Tight',system-ui,sans-serif;min-height:100vh}
-header{display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid var(--line)}
-header img{height:34px}
-header h1{font-family:Fraunces,serif;font-size:20px;color:#fff}
+header{display:flex;align-items:center;gap:14px;padding:16px 22px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--navy);z-index:10}
+header img{height:32px}
+header h1{font-family:Fraunces,serif;font-size:19px;color:#fff}
 header h1 span{color:var(--gold)}
-.wrap{max-width:1200px;margin:0 auto;padding:20px 16px}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.stat b{display:block;font-family:Fraunces,serif;font-size:26px;color:var(--gold)}
-.stat i{font-style:normal;font-size:12px;color:var(--mut);letter-spacing:.5px}
-.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
-.tab{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:99px;padding:8px 16px;font-size:13.5px;cursor:pointer}
-.tab.on{background:var(--gold);color:var(--navy);font-weight:600;border-color:var(--gold)}
-input[type=search],select{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:9px 12px;font-size:14px}
-.bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.wrap{max-width:1280px;margin:0 auto;padding:18px 16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 15px}
+.stat b{display:block;font-family:Fraunces,serif;font-size:24px;color:var(--gold);line-height:1.1}
+.stat i{font-style:normal;font-size:11px;color:var(--mut);letter-spacing:.5px;text-transform:uppercase}
+.bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+input[type=search],select{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:9px 12px;font-size:14px;font-family:inherit}
+input[type=search]{min-width:240px;flex:1}
+.tabs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.tab{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:99px;padding:8px 15px;font-size:13px;cursor:pointer;white-space:nowrap;transition:.15s}
+.tab:hover{border-color:var(--gold2)}
+.tab.on{background:var(--gold);color:var(--navy);font-weight:700;border-color:var(--gold)}
+.tab b{opacity:.7;font-weight:600}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-th{font-size:11px;letter-spacing:1.2px;color:var(--mut);text-align:left;padding:12px;border-bottom:1px solid var(--line);text-transform:uppercase}
-td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+th{font-size:10.5px;letter-spacing:1px;color:var(--mut);text-align:left;padding:11px 12px;border-bottom:1px solid var(--line);text-transform:uppercase}
+td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:middle}
 tr:last-child td{border-bottom:none}
-.nom{font-weight:600;color:#fff}.sub{font-size:12px;color:var(--mut)}
-.chip{display:inline-block;font-size:11px;padding:3px 9px;border-radius:99px;margin:1px 2px}
+tr:hover td{background:var(--card2)}
+.nom{font-weight:600;color:#fff;display:block;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sub{font-size:12px;color:var(--mut)}
+.email{color:var(--txt);font-size:13px}
+.tel{color:var(--mut);font-size:13px}
+.nodato{color:#4a5568;font-style:italic;font-size:12px}
+.chip{display:inline-block;font-size:10.5px;padding:3px 8px;border-radius:99px;margin:1px;white-space:nowrap;font-weight:600}
 .c-hot{background:#3a2b06;color:var(--gold);border:1px solid var(--gold2)}
-.c-open{background:#12324a;color:#7cc4ef}
-.c-env{background:#173a2a;color:#6fce9c}
-.c-baja{background:#3d1a1a;color:#e08585}
+.c-open{background:#12324a;color:var(--blue)}
+.c-env{background:#173a2a;color:var(--green)}
+.c-baja{background:#3d1a1a;color:var(--red)}
 .c-red{background:#26304a;color:#aab6d8}
-.acc{background:none;border:1px solid var(--line);color:var(--mut);border-radius:8px;padding:4px 9px;font-size:12px;cursor:pointer;margin:1px}
+.c-mail{background:#1a3320;color:#7bd99a}
+.c-tel{background:#2a2438;color:#c4a8e0}
+.acc{background:none;border:1px solid var(--line);color:var(--mut);border-radius:7px;padding:5px 8px;font-size:12px;cursor:pointer;margin:1px;text-decoration:none;display:inline-block}
 .acc:hover{border-color:var(--gold);color:var(--gold)}
+.acc.wa{border-color:#2a5a3a;color:#7bd99a}
 a{color:var(--gold2)}
 #login{max-width:380px;margin:14vh auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;text-align:center}
-#login h2{font-family:Fraunces,serif;margin-bottom:6px}
+#login h2{font-family:Fraunces,serif;margin-bottom:6px;color:#fff}
 #login p{color:var(--mut);font-size:13px;margin-bottom:14px}
 #login input{width:100%;margin-bottom:12px}
-.btn{background:var(--gold);color:var(--navy);border:none;border-radius:10px;padding:11px 20px;font-weight:600;font-size:14px;cursor:pointer}
+.btn{background:var(--gold);color:var(--navy);border:none;border-radius:10px;padding:11px 20px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit}
 .hide{display:none}
-@media(max-width:700px){.hidem{display:none}}
+.empty{padding:40px;text-align:center;color:var(--mut)}
+.count{font-size:12px;color:var(--mut);margin-bottom:8px}
+@media(max-width:760px){.hidem{display:none}.nom{max-width:180px}}
 </style></head>
 <body>
 <header>
@@ -387,8 +400,8 @@ a{color:var(--gold2)}
 
 <div id="login">
   <h2>Acceso al panel</h2>
-  <p>Introduce tu RADAR_API_KEY (la misma de Railway y n8n).</p>
-  <input id="clave" type="password" placeholder="RADAR_API_KEY">
+  <p>Introduce tu clave de acceso (RADAR_API_KEY).</p>
+  <input id="clave" type="password" placeholder="Clave" onkeydown="if(event.key==='Enter')entrar()">
   <button class="btn" onclick="entrar()">Entrar</button>
   <p id="err" style="color:#e08585"></p>
 </div>
@@ -396,20 +409,34 @@ a{color:var(--gold2)}
 <div class="wrap hide" id="app">
   <div class="stats" id="stats"></div>
   <div class="bar">
-    <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email..." oninput="pintar()">
+    <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
+    <select id="fmunicipio" onchange="pintar()"><option value="">Todos los municipios</option></select>
   </div>
   <div class="tabs" id="tabs"></div>
+  <div class="count" id="count"></div>
   <div style="overflow-x:auto"><table>
-    <thead><tr><th>Negocio</th><th class="hidem">Contacto</th><th>Señales</th><th>Acciones</th></tr></thead>
+    <thead><tr><th>Negocio</th><th>Contacto</th><th class="hidem">Señales</th><th>Acciones</th></tr></thead>
     <tbody id="cuerpo"></tbody>
   </table></div>
 </div>
 
 <script>
-let LEADS=[], FILTRO='calientes';
-const TABS=[['calientes','🔥 Calientes'],['abiertos','👀 Abrieron email'],['enviados','📤 Enviados'],
-            ['respondidos','💬 Respondidos'],['clientes','⭐ Clientes'],['bajas','🚫 Bajas'],['todos','Todos']];
+let LEADS=[], FILTRO='todos';
+// Pestañas: separan por CALIDAD de contacto y por estado comercial
+const TABS=[
+  ['todos','Todos'],
+  ['completos','✅ Con email'],
+  ['solotel','📱 Solo teléfono'],
+  ['sincontacto','⚠️ Sin contacto'],
+  ['listos','✍️ Listos p/ enviar'],
+  ['enviados','📤 Enviados'],
+  ['calientes','🔥 Calientes'],
+  ['abiertos','👀 Abrieron'],
+  ['respondidos','💬 Respondidos'],
+  ['clientes','⭐ Clientes'],
+  ['bajas','🚫 Bajas'],
+];
 const clave=()=>localStorage.getItem('kd_clave')||'';
 async function api(ruta,opts={}){
   const r=await fetch(ruta,{...opts,headers:{'X-API-Key':clave(),...(opts.headers||{})}});
@@ -417,75 +444,112 @@ async function api(ruta,opts={}){
   return r.json();
 }
 async function entrar(){
-  localStorage.setItem('kd_clave',document.getElementById('clave').value.trim());
+  const v=document.getElementById('clave').value.trim();
+  localStorage.setItem('kd_clave',v);
   try{ await cargar(); }catch(e){ document.getElementById('err').textContent='Clave incorrecta'; }
 }
+function tieneEmail(l){ return l.email && l.email.trim()!==''; }
+function tieneTel(l){ return l.telefono && l.telefono.trim()!==''; }
 async function cargar(){
   LEADS=await api('/api/leads');
   document.getElementById('login').classList.add('hide');
   document.getElementById('app').classList.remove('hide');
-  const nichos=[...new Set(LEADS.map(l=>l.nicho).filter(Boolean))];
+  const nichos=[...new Set(LEADS.map(l=>l.nicho).filter(Boolean))].sort();
   document.getElementById('fnicho').innerHTML='<option value="">Todos los nichos</option>'+
     nichos.map(n=>`<option>${n}</option>`).join('');
+  const muns=[...new Set(LEADS.map(l=>l.municipio).filter(Boolean))].sort();
+  document.getElementById('fmunicipio').innerHTML='<option value="">Todos los municipios</option>'+
+    muns.map(m=>`<option>${m}</option>`).join('');
   pintar();
 }
-function coincide(l){
-  const q=document.getElementById('buscar').value.toLowerCase();
-  const fn=document.getElementById('fnicho').value;
-  if(fn && l.nicho!==fn) return false;
-  if(q && !`${l.nombre} ${l.municipio} ${l.email||''} ${l.telefono||''}`.toLowerCase().includes(q)) return false;
-  switch(FILTRO){
-    case 'calientes': return !!l.visito_informe && l.estado!=='excluido';
-    case 'abiertos': return !!l.email_abierto && l.estado!=='excluido';
-    case 'enviados': return l.estado==='enviado';
+function pasaFiltroTab(l,tab){
+  if(l.estado==='excluido') return tab==='bajas';
+  switch(tab){
+    case 'todos': return true;
+    case 'completos': return tieneEmail(l);
+    case 'solotel': return !tieneEmail(l) && tieneTel(l);
+    case 'sincontacto': return !tieneEmail(l) && !tieneTel(l);
+    case 'listos': return l.estado==='redactado';
+    case 'enviados': return ['enviado','respondido','cliente'].includes(l.estado);
+    case 'calientes': return !!l.visito_informe;
+    case 'abiertos': return !!l.email_abierto;
     case 'respondidos': return l.estado==='respondido';
     case 'clientes': return l.estado==='cliente';
     case 'bajas': return l.estado==='excluido';
     default: return true;
   }
 }
+function pasaBusqueda(l){
+  const q=document.getElementById('buscar').value.toLowerCase().trim();
+  const fn=document.getElementById('fnicho').value;
+  const fm=document.getElementById('fmunicipio').value;
+  if(fn && l.nicho!==fn) return false;
+  if(fm && l.municipio!==fm) return false;
+  if(q && !`${l.nombre} ${l.municipio||''} ${l.email||''} ${l.telefono||''}`.toLowerCase().includes(q)) return false;
+  return true;
+}
 function chips(l){
   let h='';
-  if(l.visito_informe) h+=`<span class="chip c-hot">🔥 Vio su informe</span>`;
-  if(l.email_abierto) h+=`<span class="chip c-open">👀 Abrió email</span>`;
-  if(l.estado==='enviado') h+=`<span class="chip c-env">📤 Enviado</span>`;
-  if(l.estado==='redactado') h+=`<span class="chip c-red">✍️ Listo para enviar</span>`;
-  if(l.estado==='excluido') h+=`<span class="chip c-baja">🚫 Baja</span>`;
-  if(l.estado==='respondido') h+=`<span class="chip c-env">💬 Respondido</span>`;
-  if(l.estado==='cliente') h+=`<span class="chip c-hot">⭐ CLIENTE</span>`;
-  return h;
+  if(l.estado==='cliente') h+='<span class="chip c-hot">⭐ CLIENTE</span>';
+  if(l.estado==='respondido') h+='<span class="chip c-env">💬 Respondió</span>';
+  if(l.visito_informe) h+='<span class="chip c-hot">🔥 Vio informe</span>';
+  if(l.email_abierto) h+='<span class="chip c-open">👀 Abrió</span>';
+  if(l.estado==='enviado') h+='<span class="chip c-env">📤 Enviado</span>';
+  if(l.estado==='redactado') h+='<span class="chip c-red">✍️ Listo</span>';
+  if(l.estado==='excluido') h+='<span class="chip c-baja">🚫 Baja</span>';
+  if(tieneEmail(l)) h+='<span class="chip c-mail">✉ Email</span>';
+  else if(tieneTel(l)) h+='<span class="chip c-tel">📱 Tel</span>';
+  return h||'<span class="nodato">—</span>';
 }
+function movil(tel){ if(!tel)return null; const d=tel.replace(/\\D/g,''); const n=d.slice(-9); return (n[0]==='6'||n[0]==='7')?'34'+n:null; }
 function pintar(){
-  const el=document.getElementById('cuerpo'); const vis=LEADS.filter(coincide);
+  // contadores de cada pestaña (respetando búsqueda/filtros)
+  const base=LEADS.filter(pasaBusqueda);
   document.getElementById('tabs').innerHTML=TABS.map(([k,t])=>{
-    const n=LEADS.filter(l=>{const f=FILTRO;FILTRO=k;const c=coincide(l);FILTRO=f;return c;}).length;
-    return `<button class="tab ${FILTRO===k?'on':''}" onclick="FILTRO='${k}';pintar()">${t} · ${n}</button>`;
+    const n=base.filter(l=>pasaFiltroTab(l,k)).length;
+    return `<button class="tab ${FILTRO===k?'on':''}" onclick="FILTRO='${k}';pintar()">${t} <b>${n}</b></button>`;
   }).join('');
-  const s={total:LEADS.length,
+  // stats globales
+  const s={
+    total:LEADS.length,
+    email:LEADS.filter(tieneEmail).length,
+    tel:LEADS.filter(l=>!tieneEmail(l)&&tieneTel(l)).length,
+    listos:LEADS.filter(l=>l.estado==='redactado').length,
+    enviados:LEADS.filter(l=>['enviado','respondido','cliente'].includes(l.estado)).length,
     calientes:LEADS.filter(l=>l.visito_informe).length,
-    abiertos:LEADS.filter(l=>l.email_abierto).length,
-    enviados:LEADS.filter(l=>l.estado==='enviado'||l.estado==='respondido'||l.estado==='cliente').length,
     clientes:LEADS.filter(l=>l.estado==='cliente').length,
-    bajas:LEADS.filter(l=>l.estado==='excluido').length};
+  };
   document.getElementById('stats').innerHTML=
-    `<div class="stat"><b>${s.total}</b><i>LEADS</i></div>
-     <div class="stat"><b>${s.enviados}</b><i>EMAILS ENVIADOS</i></div>
-     <div class="stat"><b>${s.abiertos}</b><i>ABRIERON EMAIL</i></div>
-     <div class="stat"><b>${s.calientes}</b><i>🔥 VIERON SU INFORME</i></div>
-     <div class="stat"><b>${s.clientes}</b><i>⭐ CLIENTES</i></div>
-     <div class="stat"><b>${s.bajas}</b><i>BAJAS</i></div>`;
-  el.innerHTML=vis.map(l=>`<tr>
-    <td><span class="nom">${l.nombre}</span><br><span class="sub">${l.nicho||''} · ${l.municipio||''} ${l.rating?('· '+l.rating+'★'):''}</span></td>
-    <td class="hidem"><span class="sub">${l.email||'—'}<br>${l.telefono||''}</span></td>
-    <td>${chips(l)}</td>
-    <td>
-      ${l.telefono?`<a class="acc" href="https://wa.me/34${(l.telefono||'').replace(/\\D/g,'').slice(-9)}" target="_blank">WhatsApp</a>`:''}
-      <button class="acc" onclick="marcar(${l.id},'respondido')">💬</button>
-      <button class="acc" onclick="marcar(${l.id},'cliente')">⭐</button>
-      <button class="acc" onclick="marcar(${l.id},'descartado')">✕</button>
-    </td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--mut)">Sin leads en esta vista.</td></tr>';
+    `<div class="stat"><b>${s.total}</b><i>Leads</i></div>
+     <div class="stat"><b>${s.email}</b><i>✉ Con email</i></div>
+     <div class="stat"><b>${s.tel}</b><i>📱 Solo tel</i></div>
+     <div class="stat"><b>${s.listos}</b><i>✍️ Listos</i></div>
+     <div class="stat"><b>${s.enviados}</b><i>📤 Enviados</i></div>
+     <div class="stat"><b>${s.calientes}</b><i>🔥 Calientes</i></div>
+     <div class="stat"><b>${s.clientes}</b><i>⭐ Clientes</i></div>`;
+  // filas visibles
+  const vis=base.filter(l=>pasaFiltroTab(l,FILTRO));
+  document.getElementById('count').textContent=`${vis.length} resultados`;
+  const el=document.getElementById('cuerpo');
+  el.innerHTML=vis.map(l=>{
+    const m=movil(l.telefono);
+    const contacto = tieneEmail(l)
+      ? `<span class="email">${l.email}</span><br><span class="tel">${l.telefono||''}</span>`
+      : (tieneTel(l) ? `<span class="tel">📱 ${l.telefono}</span>` : '<span class="nodato">sin contacto</span>');
+    return `<tr>
+      <td><span class="nom" title="${l.nombre}">${l.nombre}</span>
+          <span class="sub">${l.nicho||''} · ${l.municipio||''} ${l.rating?('· '+l.rating+'★'):''}</span></td>
+      <td>${contacto}</td>
+      <td class="hidem">${chips(l)}</td>
+      <td>
+        ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank">WhatsApp</a>`:''}
+        <button class="acc" title="Respondió" onclick="marcar(${l.id},'respondido')">💬</button>
+        <button class="acc" title="Cliente" onclick="marcar(${l.id},'cliente')">⭐</button>
+        <button class="acc" title="Descartar" onclick="marcar(${l.id},'descartado')">✕</button>
+      </td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="empty">Sin leads en esta vista.</td></tr>';
 }
-async function marcar(id,estado){ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }
+async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
 if(clave()) cargar().catch(()=>{});
 </script>
 </body></html>"""
