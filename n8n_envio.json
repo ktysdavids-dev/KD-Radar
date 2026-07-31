@@ -52,8 +52,8 @@
         "fromEmail": "David Amundarain — Ktys & Davids <hola@ktysdavids.com>",
         "toEmail": "={{ $json.email }}",
         "subject": "={{ $json.email_asunto }}",
-        "emailFormat": "text",
-        "text": "={{ $json.email_cuerpo }}",
+        "emailFormat": "html",
+        "html": "={{ $json.email_html || $json.email_cuerpo }}",
         "options": { "replyTo": "hola@ktysdavids.com" }
       },
       "name": "Enviar email (SMTP IONOS)",
