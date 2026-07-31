@@ -1,0 +1,28 @@
+{
+  "name": "KD Radar - TODO EN UNO",
+  "nodes": [
+    {"parameters":{"rule":{"interval":[{"field":"cronExpression","expression":"0 8 * * 1-5"}]}},"name":"Cada dia 8:00","type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.2,"position":[0,0]},
+    {"parameters":{"method":"POST","url":"https://kd-radar-production.up.railway.app/api/prospectar?municipios=5","sendHeaders":true,"headerParameters":{"parameters":[{"name":"X-API-Key","value":"PON_AQUI_TU_CLAVE"}]},"options":{}},"name":"1 Captar leads","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[220,0],"onError":"continueRegularOutput"},
+    {"parameters":{"amount":40,"unit":"minutes"},"name":"2 Esperar captacion","type":"n8n-nodes-base.wait","typeVersion":1.1,"position":[440,0]},
+    {"parameters":{"method":"POST","url":"https://kd-radar-production.up.railway.app/api/redactar","sendHeaders":true,"headerParameters":{"parameters":[{"name":"X-API-Key","value":"PON_AQUI_TU_CLAVE"}]},"options":{}},"name":"3 Redactar emails","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[660,0],"onError":"continueRegularOutput"},
+    {"parameters":{"amount":10,"unit":"minutes"},"name":"4 Esperar redaccion","type":"n8n-nodes-base.wait","typeVersion":1.1,"position":[880,0]},
+    {"parameters":{"url":"https://kd-radar-production.up.railway.app/api/lote?limite=20","sendHeaders":true,"headerParameters":{"parameters":[{"name":"X-API-Key","value":"PON_AQUI_TU_CLAVE"}]},"options":{}},"name":"5 Obtener lote","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[1100,0]},
+    {"parameters":{"batchSize":1,"options":{}},"name":"6 Uno a uno","type":"n8n-nodes-base.splitInBatches","typeVersion":3,"position":[1320,0]},
+    {"parameters":{"amount":"={{ 60 + Math.floor(Math.random() * 120) }}","unit":"seconds"},"name":"7 Espera 1-3 min","type":"n8n-nodes-base.wait","typeVersion":1.1,"position":[1520,100]},
+    {"parameters":{"fromEmail":"David Amundarain — Ktys & Davids <hola@ktysdavids.com>","toEmail":"={{ $json.email }}","subject":"={{ $json.email_asunto }}","emailFormat":"html","html":"={{ $json.email_html || $json.email_cuerpo }}","options":{"replyTo":"hola@ktysdavids.com"}},"name":"8 Enviar email","type":"n8n-nodes-base.emailSend","typeVersion":2.1,"position":[1740,100],"credentials":{"smtp":{"id":"CONFIGURAR","name":"SMTP account"}}},
+    {"parameters":{"method":"POST","url":"=https://kd-radar-production.up.railway.app/api/enviado/{{ $('6 Uno a uno').item.json.id }}","sendHeaders":true,"headerParameters":{"parameters":[{"name":"X-API-Key","value":"PON_AQUI_TU_CLAVE"}]},"options":{}},"name":"9 Marcar enviado","type":"n8n-nodes-base.httpRequest","typeVersion":4.2,"position":[1960,100]}
+  ],
+  "connections":{
+    "Cada dia 8:00":{"main":[[{"node":"1 Captar leads","type":"main","index":0}]]},
+    "1 Captar leads":{"main":[[{"node":"2 Esperar captacion","type":"main","index":0}]]},
+    "2 Esperar captacion":{"main":[[{"node":"3 Redactar emails","type":"main","index":0}]]},
+    "3 Redactar emails":{"main":[[{"node":"4 Esperar redaccion","type":"main","index":0}]]},
+    "4 Esperar redaccion":{"main":[[{"node":"5 Obtener lote","type":"main","index":0}]]},
+    "5 Obtener lote":{"main":[[{"node":"6 Uno a uno","type":"main","index":0}]]},
+    "6 Uno a uno":{"main":[[],[{"node":"7 Espera 1-3 min","type":"main","index":0}]]},
+    "7 Espera 1-3 min":{"main":[[{"node":"8 Enviar email","type":"main","index":0}]]},
+    "8 Enviar email":{"main":[[{"node":"9 Marcar enviado","type":"main","index":0}]]},
+    "9 Marcar enviado":{"main":[[{"node":"6 Uno a uno","type":"main","index":0}]]}
+  },
+  "settings":{"executionOrder":"v1"}
+}

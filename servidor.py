@@ -287,6 +287,22 @@ def api_interesados(x_api_key: str | None = Header(default=None)):
         return [dict(f) for f in filas]
 
 
+@app.post("/api/reset")
+def api_reset(confirmar: str = "", x_api_key: str | None = Header(default=None)):
+    """Borra TODOS los leads y el registro de prospección (empezar de cero).
+    Requiere ?confirmar=SI para evitar borrados accidentales.
+    Mantiene la lista de exclusiones (bajas) por cumplimiento LSSI."""
+    verificar(x_api_key)
+    if confirmar != "SI":
+        raise HTTPException(400, "Añade ?confirmar=SI para borrar todos los leads")
+    with conexion() as con:
+        n = con.execute("SELECT COUNT(*) n FROM leads").fetchone()["n"]
+        con.execute("DELETE FROM leads")
+        con.execute("DELETE FROM prospeccion_log")
+        con.execute("DELETE FROM envios")
+    return {"ok": True, "borrados": n, "mensaje": "CRM vaciado. Listo para empezar de cero."}
+
+
 @app.post("/api/redactar")
 def api_redactar(tareas: BackgroundTasks,
                  nicho: str | None = None,
