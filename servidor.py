@@ -287,6 +287,33 @@ def api_interesados(x_api_key: str | None = Header(default=None)):
         return [dict(f) for f in filas]
 
 
+@app.post("/api/redactar")
+def api_redactar(tareas: BackgroundTasks,
+                 nicho: str | None = None,
+                 x_api_key: str | None = Header(default=None)):
+    """Redacta en segundo plano TODOS los leads auditados que tengan email
+    (reintenta los que fallaron). Desbloquea el envío sin esperar el ciclo."""
+    verificar(x_api_key)
+    import importlib
+    mod = importlib.import_module("4_generar_emails")
+
+    with conexion() as con:
+        q = ("SELECT COUNT(*) n FROM leads WHERE estado='auditado' "
+             "AND email IS NOT NULL AND email != ''")
+        params: tuple = ()
+        if nicho:
+            q += " AND nicho = ?"
+            params = (nicho,)
+        pendientes = con.execute(q, params).fetchone()["n"]
+
+    if pendientes == 0:
+        return {"ok": True, "mensaje": "No hay leads auditados con email "
+                "pendientes de redactar."}
+    tareas.add_task(mod.main, nicho)
+    return {"ok": True, "lanzado": True, "pendientes": pendientes,
+            "nota": "Redactando en segundo plano. Mira los Deploy Logs y el panel."}
+
+
 @app.get("/panel", response_class=HTMLResponse)
 def panel():
     """Panel CRM (navy/gold). La clave se pide en pantalla y viaja como

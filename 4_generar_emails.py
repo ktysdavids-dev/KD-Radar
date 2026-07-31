@@ -311,7 +311,8 @@ def redactar(lead: dict) -> dict | None:
 
 def main(nicho: str | None = None):
     if not ANTHROPIC_API_KEY:
-        sys.exit("Falta ANTHROPIC_API_KEY en .env (console.anthropic.com -> API Keys)")
+        print("[REDACCION] Falta ANTHROPIC_API_KEY; no se puede redactar")
+        return
     init_db()
     if nicho is None:
         nicho = sys.argv[1].lower() if len(sys.argv) > 1 else None
