@@ -21,7 +21,7 @@ Arranque Railway: uvicorn servidor:app --host 0.0.0.0 --port $PORT
 import os
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from config import LOTE_DIARIO
 from db import (init_db, conexion, lote_para_envio, actualizar_lead,
@@ -115,6 +115,11 @@ def api_enviado(lead_id: int, x_api_key: str | None = Header(default=None)):
     if fila["estado"] == "excluido":
         raise HTTPException(409, "Lead excluido: no marcar como enviado")
     actualizar_lead(lead_id, estado="enviado")
+    with conexion() as con:
+        asunto = con.execute("SELECT email_asunto FROM leads WHERE id=?",
+                             (lead_id,)).fetchone()["email_asunto"]
+        con.execute("INSERT INTO envios (lead_id, asunto, fecha) VALUES (?,?,?)",
+                    (lead_id, asunto, ahora()))
     return {"ok": True, "id": lead_id, "fecha": ahora()}
 
 
@@ -217,6 +222,58 @@ def informe(token: str):
 </body></html>"""
 
 
+# GIF transparente de 1x1 (tracking de aperturas de email)
+_PIXEL_GIF = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\x00\x00\x00"
+              b"!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01"
+              b"\x00\x00\x02\x02D\x01\x00;")
+
+
+@app.get("/px/{token}.gif")
+def pixel(token: str):
+    """Marca la apertura del email (píxel invisible). Endpoint público."""
+    with conexion() as con:
+        fila = con.execute(
+            "SELECT id, email_abierto FROM leads WHERE token_baja = ?",
+            (token,)).fetchone()
+    if fila and not fila["email_abierto"]:
+        actualizar_lead(fila["id"], email_abierto=ahora())
+    return Response(content=_PIXEL_GIF, media_type="image/gif",
+                    headers={"Cache-Control": "no-store, max-age=0"})
+
+
+ESTADOS_MANUALES = {"respondido", "cliente", "descartado", "redactado", "enviado"}
+
+
+@app.get("/api/leads")
+def api_leads(x_api_key: str | None = Header(default=None)):
+    """CRM: todos los leads con sus señales (enviado, abierto, informe, baja)."""
+    verificar(x_api_key)
+    with conexion() as con:
+        filas = con.execute(
+            """SELECT id, nombre, nicho, municipio, provincia, telefono, email,
+                      web, rating, num_resenas, estado, email_abierto,
+                      visito_informe, actualizado_en
+               FROM leads ORDER BY
+                 CASE WHEN visito_informe IS NOT NULL THEN 0
+                      WHEN email_abierto IS NOT NULL THEN 1 ELSE 2 END,
+                 actualizado_en DESC""").fetchall()
+        return [dict(f) for f in filas]
+
+
+@app.post("/api/lead/{lead_id}/estado/{nuevo}")
+def api_cambiar_estado(lead_id: int, nuevo: str,
+                       x_api_key: str | None = Header(default=None)):
+    """CRM: marcar manualmente un lead (respondido / cliente / descartado)."""
+    verificar(x_api_key)
+    if nuevo not in ESTADOS_MANUALES:
+        raise HTTPException(400, f"Estado no permitido. Usa: {sorted(ESTADOS_MANUALES)}")
+    with conexion() as con:
+        if not con.execute("SELECT 1 FROM leads WHERE id=?", (lead_id,)).fetchone():
+            raise HTTPException(404, "Lead no encontrado")
+    actualizar_lead(lead_id, estado=nuevo)
+    return {"ok": True, "id": lead_id, "estado": nuevo}
+
+
 @app.get("/api/interesados")
 def api_interesados(x_api_key: str | None = Header(default=None)):
     """Leads calientes: han abierto su informe. Prioridad de llamada."""
@@ -228,6 +285,167 @@ def api_interesados(x_api_key: str | None = Header(default=None)):
                FROM leads WHERE visito_informe IS NOT NULL
                ORDER BY visito_informe DESC""").fetchall()
         return [dict(f) for f in filas]
+
+
+@app.get("/panel", response_class=HTMLResponse)
+def panel():
+    """Panel CRM (navy/gold). La clave se pide en pantalla y viaja como
+    X-API-Key en cada petición; nunca se incrusta en el HTML."""
+    return """<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KD Radar · CRM</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Inter+Tight:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--navy:#0A1628;--gold:#D4AF37;--gold2:#b8912e;--cream:#f4eede;--card:#101d33;--line:#22314e;--txt:#e9ecf3;--mut:#8d97ab}
+*{box-sizing:border-box;margin:0}
+body{background:var(--navy);color:var(--txt);font-family:'Inter Tight',system-ui,sans-serif;min-height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid var(--line)}
+header img{height:34px}
+header h1{font-family:Fraunces,serif;font-size:20px;color:#fff}
+header h1 span{color:var(--gold)}
+.wrap{max-width:1200px;margin:0 auto;padding:20px 16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:18px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat b{display:block;font-family:Fraunces,serif;font-size:26px;color:var(--gold)}
+.stat i{font-style:normal;font-size:12px;color:var(--mut);letter-spacing:.5px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.tab{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:99px;padding:8px 16px;font-size:13.5px;cursor:pointer}
+.tab.on{background:var(--gold);color:var(--navy);font-weight:600;border-color:var(--gold)}
+input[type=search],select{background:var(--card);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:9px 12px;font-size:14px}
+.bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+th{font-size:11px;letter-spacing:1.2px;color:var(--mut);text-align:left;padding:12px;border-bottom:1px solid var(--line);text-transform:uppercase}
+td{padding:11px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}
+tr:last-child td{border-bottom:none}
+.nom{font-weight:600;color:#fff}.sub{font-size:12px;color:var(--mut)}
+.chip{display:inline-block;font-size:11px;padding:3px 9px;border-radius:99px;margin:1px 2px}
+.c-hot{background:#3a2b06;color:var(--gold);border:1px solid var(--gold2)}
+.c-open{background:#12324a;color:#7cc4ef}
+.c-env{background:#173a2a;color:#6fce9c}
+.c-baja{background:#3d1a1a;color:#e08585}
+.c-red{background:#26304a;color:#aab6d8}
+.acc{background:none;border:1px solid var(--line);color:var(--mut);border-radius:8px;padding:4px 9px;font-size:12px;cursor:pointer;margin:1px}
+.acc:hover{border-color:var(--gold);color:var(--gold)}
+a{color:var(--gold2)}
+#login{max-width:380px;margin:14vh auto;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:28px;text-align:center}
+#login h2{font-family:Fraunces,serif;margin-bottom:6px}
+#login p{color:var(--mut);font-size:13px;margin-bottom:14px}
+#login input{width:100%;margin-bottom:12px}
+.btn{background:var(--gold);color:var(--navy);border:none;border-radius:10px;padding:11px 20px;font-weight:600;font-size:14px;cursor:pointer}
+.hide{display:none}
+@media(max-width:700px){.hidem{display:none}}
+</style></head>
+<body>
+<header>
+  <img src="https://cdn.prod.website-files.com/68b944d4a42f90c19d14a5da/6928305ea0e60a4050067585_Logo-normal.webp" alt="K&D">
+  <h1>KD Radar <span>· CRM</span></h1>
+</header>
+
+<div id="login">
+  <h2>Acceso al panel</h2>
+  <p>Introduce tu RADAR_API_KEY (la misma de Railway y n8n).</p>
+  <input id="clave" type="password" placeholder="RADAR_API_KEY">
+  <button class="btn" onclick="entrar()">Entrar</button>
+  <p id="err" style="color:#e08585"></p>
+</div>
+
+<div class="wrap hide" id="app">
+  <div class="stats" id="stats"></div>
+  <div class="bar">
+    <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email..." oninput="pintar()">
+    <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
+  </div>
+  <div class="tabs" id="tabs"></div>
+  <div style="overflow-x:auto"><table>
+    <thead><tr><th>Negocio</th><th class="hidem">Contacto</th><th>Señales</th><th>Acciones</th></tr></thead>
+    <tbody id="cuerpo"></tbody>
+  </table></div>
+</div>
+
+<script>
+let LEADS=[], FILTRO='calientes';
+const TABS=[['calientes','🔥 Calientes'],['abiertos','👀 Abrieron email'],['enviados','📤 Enviados'],
+            ['respondidos','💬 Respondidos'],['clientes','⭐ Clientes'],['bajas','🚫 Bajas'],['todos','Todos']];
+const clave=()=>localStorage.getItem('kd_clave')||'';
+async function api(ruta,opts={}){
+  const r=await fetch(ruta,{...opts,headers:{'X-API-Key':clave(),...(opts.headers||{})}});
+  if(r.status===401) throw new Error('clave');
+  return r.json();
+}
+async function entrar(){
+  localStorage.setItem('kd_clave',document.getElementById('clave').value.trim());
+  try{ await cargar(); }catch(e){ document.getElementById('err').textContent='Clave incorrecta'; }
+}
+async function cargar(){
+  LEADS=await api('/api/leads');
+  document.getElementById('login').classList.add('hide');
+  document.getElementById('app').classList.remove('hide');
+  const nichos=[...new Set(LEADS.map(l=>l.nicho).filter(Boolean))];
+  document.getElementById('fnicho').innerHTML='<option value="">Todos los nichos</option>'+
+    nichos.map(n=>`<option>${n}</option>`).join('');
+  pintar();
+}
+function coincide(l){
+  const q=document.getElementById('buscar').value.toLowerCase();
+  const fn=document.getElementById('fnicho').value;
+  if(fn && l.nicho!==fn) return false;
+  if(q && !`${l.nombre} ${l.municipio} ${l.email||''} ${l.telefono||''}`.toLowerCase().includes(q)) return false;
+  switch(FILTRO){
+    case 'calientes': return !!l.visito_informe && l.estado!=='excluido';
+    case 'abiertos': return !!l.email_abierto && l.estado!=='excluido';
+    case 'enviados': return l.estado==='enviado';
+    case 'respondidos': return l.estado==='respondido';
+    case 'clientes': return l.estado==='cliente';
+    case 'bajas': return l.estado==='excluido';
+    default: return true;
+  }
+}
+function chips(l){
+  let h='';
+  if(l.visito_informe) h+=`<span class="chip c-hot">🔥 Vio su informe</span>`;
+  if(l.email_abierto) h+=`<span class="chip c-open">👀 Abrió email</span>`;
+  if(l.estado==='enviado') h+=`<span class="chip c-env">📤 Enviado</span>`;
+  if(l.estado==='redactado') h+=`<span class="chip c-red">✍️ Listo para enviar</span>`;
+  if(l.estado==='excluido') h+=`<span class="chip c-baja">🚫 Baja</span>`;
+  if(l.estado==='respondido') h+=`<span class="chip c-env">💬 Respondido</span>`;
+  if(l.estado==='cliente') h+=`<span class="chip c-hot">⭐ CLIENTE</span>`;
+  return h;
+}
+function pintar(){
+  const el=document.getElementById('cuerpo'); const vis=LEADS.filter(coincide);
+  document.getElementById('tabs').innerHTML=TABS.map(([k,t])=>{
+    const n=LEADS.filter(l=>{const f=FILTRO;FILTRO=k;const c=coincide(l);FILTRO=f;return c;}).length;
+    return `<button class="tab ${FILTRO===k?'on':''}" onclick="FILTRO='${k}';pintar()">${t} · ${n}</button>`;
+  }).join('');
+  const s={total:LEADS.length,
+    calientes:LEADS.filter(l=>l.visito_informe).length,
+    abiertos:LEADS.filter(l=>l.email_abierto).length,
+    enviados:LEADS.filter(l=>l.estado==='enviado'||l.estado==='respondido'||l.estado==='cliente').length,
+    clientes:LEADS.filter(l=>l.estado==='cliente').length,
+    bajas:LEADS.filter(l=>l.estado==='excluido').length};
+  document.getElementById('stats').innerHTML=
+    `<div class="stat"><b>${s.total}</b><i>LEADS</i></div>
+     <div class="stat"><b>${s.enviados}</b><i>EMAILS ENVIADOS</i></div>
+     <div class="stat"><b>${s.abiertos}</b><i>ABRIERON EMAIL</i></div>
+     <div class="stat"><b>${s.calientes}</b><i>🔥 VIERON SU INFORME</i></div>
+     <div class="stat"><b>${s.clientes}</b><i>⭐ CLIENTES</i></div>
+     <div class="stat"><b>${s.bajas}</b><i>BAJAS</i></div>`;
+  el.innerHTML=vis.map(l=>`<tr>
+    <td><span class="nom">${l.nombre}</span><br><span class="sub">${l.nicho||''} · ${l.municipio||''} ${l.rating?('· '+l.rating+'★'):''}</span></td>
+    <td class="hidem"><span class="sub">${l.email||'—'}<br>${l.telefono||''}</span></td>
+    <td>${chips(l)}</td>
+    <td>
+      ${l.telefono?`<a class="acc" href="https://wa.me/34${(l.telefono||'').replace(/\\D/g,'').slice(-9)}" target="_blank">WhatsApp</a>`:''}
+      <button class="acc" onclick="marcar(${l.id},'respondido')">💬</button>
+      <button class="acc" onclick="marcar(${l.id},'cliente')">⭐</button>
+      <button class="acc" onclick="marcar(${l.id},'descartado')">✕</button>
+    </td></tr>`).join('') || '<tr><td colspan="4" style="color:var(--mut)">Sin leads en esta vista.</td></tr>';
+}
+async function marcar(id,estado){ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }
+if(clave()) cargar().catch(()=>{});
+</script>
+</body></html>"""
 
 
 @app.get("/baja/{token}", response_class=HTMLResponse)

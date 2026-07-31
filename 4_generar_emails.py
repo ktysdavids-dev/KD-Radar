@@ -209,6 +209,7 @@ PLANTILLA_HTML = """<!DOCTYPE html>
     <a href="{baja_url}" style="color:#8a8577;">Darse de baja (un clic)</a>
   </td></tr>
 </table>
+<img src="{url_pixel}" width="1" height="1" alt="" style="display:block;border:0;">
 </td></tr>
 </table>
 </body>
@@ -216,7 +217,7 @@ PLANTILLA_HTML = """<!DOCTYPE html>
 
 
 def construir_html(cuerpo: str, baja_url: str, nicho: str, negocio: str,
-                   url_informe: str) -> str:
+                   url_informe: str, url_pixel: str) -> str:
     parrafos_html = []
     for parrafo in cuerpo.split("\n\n"):
         parrafo = parrafo.strip()
@@ -243,6 +244,7 @@ def construir_html(cuerpo: str, baja_url: str, nicho: str, negocio: str,
         t2_texto=html_lib.escape(t2["texto"]),
         t2_url=t2["url"],
         url_informe=url_informe,
+        url_pixel=url_pixel,
         remitente_email=REMITENTE_EMAIL,
         empresa_legal=html_lib.escape(EMPRESA_LEGAL),
         baja_url=baja_url,
@@ -311,9 +313,10 @@ def main(nicho: str | None = None):
         cuerpo_texto = datos["cuerpo"].rstrip() + PIE_LEGAL_TEXTO.format(
             remitente=REMITENTE_NOMBRE, empresa=EMPRESA_LEGAL, baja_url=baja_url)
         url_informe = f"{BASE_URL}/informe/{lead['token_baja']}"
+        url_pixel = f"{BASE_URL}/px/{lead['token_baja']}.gif"
         cuerpo_html = construir_html(datos["cuerpo"], baja_url,
                                      lead.get("nicho") or "restaurantes",
-                                     lead["nombre"], url_informe)
+                                     lead["nombre"], url_informe, url_pixel)
         actualizar_lead(lead["id"],
                         email_asunto=datos["asunto"][:120],
                         email_cuerpo=cuerpo_texto,

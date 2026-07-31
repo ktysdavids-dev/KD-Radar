@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS leads (
     email_cuerpo TEXT,
     email_html TEXT,
     visito_informe TEXT,
+    email_abierto TEXT,
     estado TEXT DEFAULT 'nuevo',
     nicho TEXT DEFAULT 'restaurantes',
     token_baja TEXT UNIQUE,
@@ -58,6 +59,15 @@ CREATE TABLE IF NOT EXISTS prospeccion_log (
     municipio TEXT,
     fecha TEXT,
     PRIMARY KEY (nicho, municipio)
+);
+
+-- Historial de envíos (base para campañas posteriores y re-segmentación)
+CREATE TABLE IF NOT EXISTS envios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER,
+    asunto TEXT,
+    campana TEXT DEFAULT 'kd-radar-1',
+    fecha TEXT
 );
 """
 
@@ -88,6 +98,8 @@ def init_db():
             con.execute("ALTER TABLE leads ADD COLUMN email_html TEXT")
         if "visito_informe" not in columnas:
             con.execute("ALTER TABLE leads ADD COLUMN visito_informe TEXT")
+        if "email_abierto" not in columnas:
+            con.execute("ALTER TABLE leads ADD COLUMN email_abierto TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_nicho ON leads(nicho)")
 
 
