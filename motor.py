@@ -29,15 +29,25 @@ estado_motor: dict = {"ocupado": False, "ultima_ejecucion": None, "error": None}
 
 
 def siguientes_combos(cuantos: int) -> list[tuple[str, str, str]]:
-    """Próximos (nicho, municipio, provincia) pendientes, mismo nicho por lote."""
+    """Rotación NICHO DIARIO (round-robin): cada ejecución ataca el nicho
+    con menos municipios completados -> día 1 restaurantes, día 2 barberías,
+    día 3 estética... y al completar la vuelta, siguiente tanda de municipios
+    del primer nicho. Nunca repite un combo ya prospectado."""
     hechas = prospecciones_hechas()
-    pendientes = [(n, m, p) for n in NICHOS for m, p in MUNICIPIOS
-                  if (n, m) not in hechas]
-    if not pendientes:
+    conteo = {n: 0 for n in NICHOS}
+    for n, _m in hechas:
+        if n in conteo:
+            conteo[n] += 1
+    total_municipios = len(MUNICIPIOS)
+    candidatos = [n for n in NICHOS if conteo[n] < total_municipios]
+    if not candidatos:
         return []
-    primer_nicho = pendientes[0][0]
-    del_mismo_nicho = [c for c in pendientes if c[0] == primer_nicho]
-    return del_mismo_nicho[:cuantos]
+    orden = list(NICHOS)
+    candidatos.sort(key=lambda n: (conteo[n], orden.index(n)))
+    nicho = candidatos[0]
+    pendientes = [(nicho, m, p) for m, p in MUNICIPIOS
+                  if (nicho, m) not in hechas]
+    return pendientes[:cuantos]
 
 
 def ejecutar_prospeccion(municipios_por_dia: int = 5) -> dict:
