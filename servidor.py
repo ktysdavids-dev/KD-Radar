@@ -290,18 +290,59 @@ def api_interesados(x_api_key: str | None = Header(default=None)):
 
 @app.post("/api/limpiar-sin-contacto")
 def api_limpiar(x_api_key: str | None = Header(default=None)):
-    """Borra los leads que no tienen ni web ni teléfono (inservibles)."""
+    """Borra los leads sin email NI teléfono (mismo criterio que el panel).
+    Da igual si tienen web: sin canal de contacto directo no sirven."""
     verificar(x_api_key)
     with conexion() as con:
         n = con.execute(
             """DELETE FROM leads
                WHERE (telefono IS NULL OR telefono='')
-                 AND (web IS NULL OR web='')
                  AND (email IS NULL OR email='')
                  AND estado NOT IN ('cliente','respondido')"""
         ).rowcount
     return {"ok": True, "borrados": n,
             "mensaje": f"{n} leads sin contacto eliminados."}
+
+
+@app.delete("/api/lead/{lead_id}")
+def api_borrar_lead(lead_id: int, x_api_key: str | None = Header(default=None)):
+    """Borra un lead concreto (botón X del panel)."""
+    verificar(x_api_key)
+    with conexion() as con:
+        n = con.execute("DELETE FROM leads WHERE id = ?", (lead_id,)).rowcount
+    if n == 0:
+        raise HTTPException(404, "Lead no encontrado")
+    return {"ok": True, "borrado": lead_id}
+
+
+@app.post("/api/lead/nuevo")
+def api_nuevo_lead(datos: dict, x_api_key: str | None = Header(default=None)):
+    """Añade un contacto a mano desde el panel. Requiere nombre y al menos
+    email o teléfono. Si trae email, entra directo al circuito de envío."""
+    verificar(x_api_key)
+    import secrets as _s
+    nombre = (datos.get("nombre") or "").strip()
+    email = (datos.get("email") or "").strip().lower() or None
+    telefono = (datos.get("telefono") or "").strip() or None
+    if not nombre:
+        raise HTTPException(400, "Falta el nombre del negocio")
+    if not email and not telefono:
+        raise HTTPException(400, "Pon al menos email o teléfono")
+    estado = "auditado" if email else "sin_email"
+    with conexion() as con:
+        con.execute(
+            """INSERT INTO leads (place_id, nombre, municipio, provincia, nicho,
+                                  telefono, email, web, estado, token_baja,
+                                  creado_en, actualizado_en)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (f"manual-{_s.token_urlsafe(8)}", nombre,
+             (datos.get("municipio") or "").strip() or None, "Valencia",
+             (datos.get("nicho") or "restaurantes").strip(),
+             telefono, email, (datos.get("web") or "").strip() or None,
+             estado, _s.token_urlsafe(16), ahora(), ahora()))
+    return {"ok": True, "mensaje": f"'{nombre}' añadido"
+            + (" (entrará en la próxima redacción y envío)" if email
+               else " (lista de WhatsApp)")}
 
 
 @app.post("/api/reset")
@@ -429,7 +470,25 @@ a{color:var(--gold2)}
     <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
     <select id="fmunicipio" onchange="pintar()"><option value="">Todos los municipios</option></select>
+    <button class="acc" style="border-color:#3a5a3a;color:#7bd99a" onclick="abrirNuevo()">➕ Añadir contacto</button>
+    <button class="acc" style="border-color:var(--gold2);color:var(--gold)" onclick="redactarAhora()">✍️ Redactar ahora</button>
     <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
+  </div>
+
+  <div id="modal" class="hide" style="position:fixed;inset:0;background:rgba(4,8,16,.75);display:flex;align-items:center;justify-content:center;z-index:50">
+    <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:420px;width:92%">
+      <h3 style="font-family:Fraunces,serif;color:#fff;margin-bottom:12px">Añadir contacto</h3>
+      <input id="n_nombre" placeholder="Nombre del negocio *" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="n_email" placeholder="Email" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="n_tel" placeholder="Teléfono" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="n_municipio" placeholder="Municipio" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <select id="n_nicho" style="width:100%;margin-bottom:14px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px"></select>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button class="acc" onclick="cerrarNuevo()">Cancelar</button>
+        <button class="btn" onclick="guardarNuevo()">Guardar</button>
+      </div>
+      <p id="n_err" style="color:#e08585;font-size:13px;margin-top:8px"></p>
+    </div>
   </div>
   <div class="tabs" id="tabs"></div>
   <div class="count" id="count"></div>
@@ -563,14 +622,48 @@ function pintar(){
         ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank">WhatsApp</a>`:''}
         <button class="acc" title="Respondió" onclick="marcar(${l.id},'respondido')">💬</button>
         <button class="acc" title="Cliente" onclick="marcar(${l.id},'cliente')">⭐</button>
-        <button class="acc" title="Descartar" onclick="marcar(${l.id},'descartado')">✕</button>
+        <button class="acc" title="Borrar" onclick="borrarLead(${l.id},'${(l.nombre||'').replace(/'/g,"\\\\'")}')">✕</button>
       </td></tr>`;
   }).join('') || '<tr><td colspan="4" class="empty">Sin leads en esta vista.</td></tr>';
 }
 async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
+async function borrarLead(id,nombre){
+  if(!confirm(`¿Borrar "${nombre}" definitivamente?`)) return;
+  try{ await api(`/api/lead/${id}`,{method:'DELETE'}); await cargar(); }catch(e){ alert('Error al borrar'); }
+}
 async function limpiar(){
   if(!confirm('¿Borrar todos los leads sin ningún contacto (ni email ni teléfono)? No se pueden recuperar.')) return;
   try{ const r=await api('/api/limpiar-sin-contacto',{method:'POST'}); alert(r.mensaje); await cargar(); }catch(e){ alert('Error'); }
+}
+async function redactarAhora(){
+  try{ const r=await api('/api/redactar',{method:'POST'});
+    alert(r.pendientes!==undefined ? `Redactando ${r.pendientes} leads en segundo plano. Refresca en unos minutos.` : (r.mensaje||'Lanzado'));
+  }catch(e){ alert('Error al lanzar la redacción'); }
+}
+function abrirNuevo(){
+  const nichos=[...new Set(LEADS.map(l=>l.nicho).filter(Boolean))];
+  const base=nichos.length?nichos:['restaurantes','barberias','estetica','talleres','fisioterapia','veterinarias','autoescuelas','opticas','gimnasios'];
+  document.getElementById('n_nicho').innerHTML=base.map(n=>`<option>${n}</option>`).join('');
+  document.getElementById('n_err').textContent='';
+  document.getElementById('modal').classList.remove('hide');
+}
+function cerrarNuevo(){ document.getElementById('modal').classList.add('hide'); }
+async function guardarNuevo(){
+  const datos={
+    nombre:document.getElementById('n_nombre').value,
+    email:document.getElementById('n_email').value,
+    telefono:document.getElementById('n_tel').value,
+    municipio:document.getElementById('n_municipio').value,
+    nicho:document.getElementById('n_nicho').value,
+  };
+  try{
+    const r=await fetch('/api/lead/nuevo',{method:'POST',headers:{'X-API-Key':clave(),'Content-Type':'application/json'},body:JSON.stringify(datos)});
+    const j=await r.json();
+    if(!r.ok){ document.getElementById('n_err').textContent=j.detail||'Error'; return; }
+    cerrarNuevo();
+    ['n_nombre','n_email','n_tel','n_municipio'].forEach(i=>document.getElementById(i).value='');
+    await cargar();
+  }catch(e){ document.getElementById('n_err').textContent='Error de conexión'; }
 }
 if(clave()) cargar().catch(()=>{});
 </script>
