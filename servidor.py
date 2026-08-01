@@ -20,11 +20,15 @@ Variables de entorno en Railway:
 Arranque Railway: uvicorn servidor:app --host 0.0.0.0 --port $PORT
 """
 import os
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
-from config import LOTE_DIARIO
+from config import (LOTE_DIARIO, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
+                    REMITENTE_NOMBRE, REMITENTE_EMAIL)
 from db import (init_db, conexion, lote_para_envio, actualizar_lead,
                 excluir_email, stats, stats_por_nicho, ahora)
 from motor import ejecutar_prospeccion, estado_motor, siguientes_combos
@@ -242,7 +246,8 @@ def pixel(token: str):
                     headers={"Cache-Control": "no-store, max-age=0"})
 
 
-ESTADOS_MANUALES = {"respondido", "cliente", "descartado", "redactado", "enviado"}
+ESTADOS_MANUALES = {"respondido", "cliente", "descartado", "redactado",
+                    "enviado", "auditado", "sin_email"}
 
 
 @app.get("/api/leads")
@@ -253,7 +258,7 @@ def api_leads(x_api_key: str | None = Header(default=None)):
         filas = con.execute(
             """SELECT id, nombre, nicho, municipio, provincia, telefono, email,
                       web, rating, num_resenas, estado, email_abierto,
-                      visito_informe, actualizado_en
+                      visito_informe, llamado, actualizado_en
                FROM leads ORDER BY
                  CASE WHEN visito_informe IS NOT NULL THEN 0
                       WHEN email_abierto IS NOT NULL THEN 1 ELSE 2 END,
@@ -286,6 +291,81 @@ def api_interesados(x_api_key: str | None = Header(default=None)):
                FROM leads WHERE visito_informe IS NOT NULL
                ORDER BY visito_informe DESC""").fetchall()
         return [dict(f) for f in filas]
+
+
+@app.post("/api/lead/{lead_id}/toggle-cliente")
+def api_toggle_cliente(lead_id: int, x_api_key: str | None = Header(default=None)):
+    """Marca como cliente, o si ya lo es, lo revierte a su estado natural
+    (enviado si ya se le envió, o auditado/sin_email según tenga email)."""
+    verificar(x_api_key)
+    with conexion() as con:
+        l = con.execute("SELECT estado, email, email_html FROM leads WHERE id=?",
+                        (lead_id,)).fetchone()
+    if not l:
+        raise HTTPException(404, "Lead no encontrado")
+    l = dict(l)
+    if l["estado"] == "cliente":
+        # Revertir: si tenía email redactado -> redactado; si email -> auditado; si no -> sin_email
+        nuevo = ("redactado" if l.get("email_html")
+                 else "auditado" if l.get("email") else "sin_email")
+    else:
+        nuevo = "cliente"
+    actualizar_lead(lead_id, estado=nuevo)
+    return {"ok": True, "estado": nuevo, "es_cliente": nuevo == "cliente"}
+
+
+@app.post("/api/lead/{lead_id}/enviar")
+def api_enviar_directo(lead_id: int, x_api_key: str | None = Header(default=None)):
+    """Envía AHORA el email a un lead concreto (botón del panel).
+    El lead debe tener email y estar redactado (con email_html/cuerpo listo)."""
+    verificar(x_api_key)
+    if not SMTP_PASS:
+        raise HTTPException(400, "Falta configurar SMTP_PASS en Railway (contraseña del buzón IONOS)")
+    with conexion() as con:
+        l = con.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+    if not l:
+        raise HTTPException(404, "Lead no encontrado")
+    lead = dict(l)
+    if not lead.get("email"):
+        raise HTTPException(400, "Este lead no tiene email")
+    if lead.get("estado") == "excluido":
+        raise HTTPException(409, "Lead dado de baja")
+    cuerpo_html = lead.get("email_html")
+    asunto = lead.get("email_asunto")
+    if not cuerpo_html or not asunto:
+        raise HTTPException(400, "Este email aún no está redactado. Pulsa 'Redactar ahora' primero.")
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = asunto
+        msg["From"] = f"{REMITENTE_NOMBRE} <{REMITENTE_EMAIL}>"
+        msg["To"] = lead["email"]
+        msg["Reply-To"] = REMITENTE_EMAIL
+        if lead.get("email_cuerpo"):
+            msg.attach(MIMEText(lead["email_cuerpo"], "plain", "utf-8"))
+        msg.attach(MIMEText(cuerpo_html, "html", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+    except Exception as e:
+        raise HTTPException(502, f"Error enviando: {type(e).__name__}: {e}")
+    actualizar_lead(lead_id, estado="enviado")
+    with conexion() as con:
+        con.execute("INSERT INTO envios (lead_id, asunto, campana, fecha) VALUES (?,?,?,?)",
+                    (lead_id, asunto, "manual-panel", ahora()))
+    return {"ok": True, "enviado_a": lead["email"]}
+
+
+@app.post("/api/lead/{lead_id}/llamado")
+def api_marcar_llamado(lead_id: int, valor: int = 1,
+                       x_api_key: str | None = Header(default=None)):
+    """Marca/desmarca un lead como llamado (seguimiento comercial)."""
+    verificar(x_api_key)
+    with conexion() as con:
+        if not con.execute("SELECT 1 FROM leads WHERE id=?", (lead_id,)).fetchone():
+            raise HTTPException(404, "Lead no encontrado")
+    actualizar_lead(lead_id, llamado=ahora() if valor else None)
+    return {"ok": True, "llamado": bool(valor)}
 
 
 @app.post("/api/limpiar-sin-contacto")
@@ -506,6 +586,8 @@ const TABS=[
   ['completos','✅ Con email'],
   ['solotel','📱 Solo teléfono'],
   ['sincontacto','⚠️ Sin contacto'],
+  ['llamados','📞 Llamados'],
+  ['sinllamar','☎️ Sin llamar'],
   ['listos','✍️ Listos p/ enviar'],
   ['enviados','📤 Enviados'],
   ['calientes','🔥 Calientes'],
@@ -518,7 +600,9 @@ const clave=()=>localStorage.getItem('kd_clave')||'';
 async function api(ruta,opts={}){
   const r=await fetch(ruta,{...opts,headers:{'X-API-Key':clave(),...(opts.headers||{})}});
   if(r.status===401) throw new Error('clave');
-  return r.json();
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.detail||('Error '+r.status));
+  return j;
 }
 async function entrar(){
   const v=document.getElementById('clave').value.trim();
@@ -546,6 +630,8 @@ function pasaFiltroTab(l,tab){
     case 'completos': return tieneEmail(l);
     case 'solotel': return !tieneEmail(l) && tieneTel(l);
     case 'sincontacto': return !tieneEmail(l) && !tieneTel(l);
+    case 'llamados': return !!l.llamado;
+    case 'sinllamar': return tieneTel(l) && !l.llamado && l.estado!=='excluido';
     case 'listos': return l.estado==='redactado';
     case 'enviados': return ['enviado','respondido','cliente'].includes(l.estado);
     case 'calientes': return !!l.visito_informe;
@@ -574,6 +660,7 @@ function chips(l){
   if(l.estado==='enviado') h+='<span class="chip c-env">📤 Enviado</span>';
   if(l.estado==='redactado') h+='<span class="chip c-red">✍️ Listo</span>';
   if(l.estado==='excluido') h+='<span class="chip c-baja">🚫 Baja</span>';
+  if(l.llamado) h+='<span class="chip" style="background:#3d2a1a;color:#e0a585">📞 Llamado</span>';
   if(tieneEmail(l)) h+='<span class="chip c-mail">✉ Email</span>';
   else if(tieneTel(l)) h+='<span class="chip c-tel">📱 Tel</span>';
   return h||'<span class="nodato">—</span>';
@@ -619,14 +706,29 @@ function pintar(){
       <td>${contacto}</td>
       <td class="hidem">${chips(l)}</td>
       <td>
-        ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank">WhatsApp</a>`:''}
-        <button class="acc" title="Respondió" onclick="marcar(${l.id},'respondido')">💬</button>
-        <button class="acc" title="Cliente" onclick="marcar(${l.id},'cliente')">⭐</button>
+        ${tieneEmail(l) && l.estado!=='excluido' ? `<button class="acc" style="border-color:#3a5a3a;color:#7bd99a" title="Enviar email ahora" onclick="enviarEmail(${l.id})">✉ Enviar</button>` : ''}
+        ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank" title="Abrir WhatsApp">WhatsApp</a>`:''}
+        ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
+        <button class="acc" style="${l.estado==='cliente'?'border-color:var(--gold);color:var(--gold);background:#3a2b06':''}" title="${l.estado==='cliente'?'Es cliente (clic para quitar)':'Marcar cliente'}" onclick="toggleCliente(${l.id})">${l.estado==='cliente'?'⭐ Cliente':'☆'}</button>
         <button class="acc" title="Borrar" onclick="borrarLead(${l.id})">✕</button>
       </td></tr>`;
   }).join('') || '<tr><td colspan="4" class="empty">Sin leads en esta vista.</td></tr>';
 }
 async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
+async function toggleCliente(id){
+  try{ await api(`/api/lead/${id}/toggle-cliente`,{method:'POST'}); await cargar(); }catch(e){ alert('Error'); }
+}
+async function marcarLlamado(id,valor){
+  try{ await api(`/api/lead/${id}/llamado?valor=${valor}`,{method:'POST'}); await cargar(); }catch(e){ alert('Error'); }
+}
+async function enviarEmail(id){
+  const l=LEADS.find(x=>x.id===id);
+  if(!confirm('¿Enviar el email ahora a "'+(l?l.nombre:'')+'" ('+(l?l.email:'')+')?')) return;
+  try{
+    const r=await api(`/api/lead/${id}/enviar`,{method:'POST'});
+    alert('✅ Email enviado a '+r.enviado_a); await cargar();
+  }catch(e){ alert('⚠️ '+e.message); }
+}
 async function borrarLead(id){
   const l=LEADS.find(x=>x.id===id);
   if(!confirm('¿Borrar "'+(l?l.nombre:'este lead')+'" definitivamente?')) return;
