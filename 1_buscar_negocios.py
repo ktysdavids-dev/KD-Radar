@@ -65,14 +65,20 @@ def procesar_municipio(nicho: str, municipio: str, provincia: str) -> int:
         for p in buscar(query):
             if p.get("businessStatus") == "CLOSED_PERMANENTLY":
                 continue
+            web = p.get("websiteUri")
+            telefono = p.get("nationalPhoneNumber")
+            # Descartar negocios sin ningún canal de contacto: son inútiles
+            # (no se puede ni llamar ni escribir ni sacar email de su web)
+            if not web and not telefono:
+                continue
             upsert_lead({
                 "place_id": p["id"],
                 "nombre": p.get("displayName", {}).get("text", "Sin nombre"),
                 "direccion": p.get("formattedAddress"),
                 "municipio": municipio,
                 "provincia": provincia,
-                "telefono": p.get("nationalPhoneNumber"),
-                "web": p.get("websiteUri"),
+                "telefono": telefono,
+                "web": web,
                 "delivery": p.get("delivery", False),
                 "rating": p.get("rating"),
                 "num_resenas": p.get("userRatingCount"),

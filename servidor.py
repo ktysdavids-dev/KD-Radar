@@ -1,4 +1,5 @@
 from __future__ import annotations
+# VERSION_KDRADAR = "v4-2027-01-CRM-completo"  <-- si ves esta linea, es el codigo NUEVO
 """KD Radar v3 — Servidor API (FastAPI) para Railway + n8n.
 
 Endpoints (auth por cabecera X-API-Key, salvo /baja y /salud):
@@ -287,6 +288,22 @@ def api_interesados(x_api_key: str | None = Header(default=None)):
         return [dict(f) for f in filas]
 
 
+@app.post("/api/limpiar-sin-contacto")
+def api_limpiar(x_api_key: str | None = Header(default=None)):
+    """Borra los leads que no tienen ni web ni teléfono (inservibles)."""
+    verificar(x_api_key)
+    with conexion() as con:
+        n = con.execute(
+            """DELETE FROM leads
+               WHERE (telefono IS NULL OR telefono='')
+                 AND (web IS NULL OR web='')
+                 AND (email IS NULL OR email='')
+                 AND estado NOT IN ('cliente','respondido')"""
+        ).rowcount
+    return {"ok": True, "borrados": n,
+            "mensaje": f"{n} leads sin contacto eliminados."}
+
+
 @app.post("/api/reset")
 def api_reset(confirmar: str = "", x_api_key: str | None = Header(default=None)):
     """Borra TODOS los leads y el registro de prospección (empezar de cero).
@@ -412,6 +429,7 @@ a{color:var(--gold2)}
     <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
     <select id="fmunicipio" onchange="pintar()"><option value="">Todos los municipios</option></select>
+    <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
   </div>
   <div class="tabs" id="tabs"></div>
   <div class="count" id="count"></div>
@@ -550,6 +568,10 @@ function pintar(){
   }).join('') || '<tr><td colspan="4" class="empty">Sin leads en esta vista.</td></tr>';
 }
 async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
+async function limpiar(){
+  if(!confirm('¿Borrar todos los leads sin ningún contacto (ni email ni teléfono)? No se pueden recuperar.')) return;
+  try{ const r=await api('/api/limpiar-sin-contacto',{method:'POST'}); alert(r.mensaje); await cargar(); }catch(e){ alert('Error'); }
+}
 if(clave()) cargar().catch(()=>{});
 </script>
 </body></html>"""
