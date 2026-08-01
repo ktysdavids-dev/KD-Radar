@@ -496,7 +496,7 @@ def api_redactar(tareas: BackgroundTasks,
     if pendientes == 0:
         return {"ok": True, "mensaje": "No hay leads auditados con email "
                 "pendientes de redactar."}
-    tareas.add_task(mod.main, nicho)
+    tareas.add_task(mod.main, nicho, False)
     return {"ok": True, "lanzado": True, "pendientes": pendientes,
             "nota": "Redactando en segundo plano. Mira los Deploy Logs y el panel."}
 

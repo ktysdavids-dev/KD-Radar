@@ -309,12 +309,14 @@ def redactar(lead: dict) -> dict | None:
     return None
 
 
-def main(nicho: str | None = None):
+def main(nicho: str | None = None, desde_cli: bool = False):
     if not ANTHROPIC_API_KEY:
         print("[REDACCION] Falta ANTHROPIC_API_KEY; no se puede redactar")
         return
     init_db()
-    if nicho is None:
+    # Solo mirar argumentos de línea de comandos si se ejecuta desde terminal,
+    # NUNCA cuando el servidor llama a esta función (sys.argv sería 'servidor:app')
+    if nicho is None and desde_cli:
         nicho = sys.argv[1].lower() if len(sys.argv) > 1 else None
     if nicho:
         nicho_config(nicho)
@@ -349,4 +351,4 @@ def main(nicho: str | None = None):
 
 
 if __name__ == "__main__":
-    main()
+    main(desde_cli=True)
