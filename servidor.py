@@ -475,7 +475,7 @@ a{color:var(--gold2)}
     <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
   </div>
 
-  <div id="modal" class="hide" onclick="if(event.target===this)cerrarNuevo()" style="position:fixed;inset:0;background:rgba(4,8,16,.75);display:flex;align-items:center;justify-content:center;z-index:50">
+  <div id="modal" onclick="if(event.target===this)cerrarNuevo()" style="display:none;position:fixed;inset:0;background:rgba(4,8,16,.75);align-items:center;justify-content:center;z-index:50">
     <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:420px;width:92%">
       <h3 style="font-family:Fraunces,serif;color:#fff;margin-bottom:12px">Añadir contacto</h3>
       <input id="n_nombre" placeholder="Nombre del negocio *" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
@@ -647,9 +647,9 @@ function abrirNuevo(){
   const base=nichos.length?nichos:['restaurantes','barberias','estetica','talleres','fisioterapia','veterinarias','autoescuelas','opticas','gimnasios'];
   document.getElementById('n_nicho').innerHTML=base.map(n=>`<option>${n}</option>`).join('');
   document.getElementById('n_err').textContent='';
-  document.getElementById('modal').classList.remove('hide');
+  document.getElementById('modal').style.display='flex';
 }
-function cerrarNuevo(){ document.getElementById('modal').classList.add('hide'); }
+function cerrarNuevo(){ document.getElementById('modal').style.display='none'; }
 async function guardarNuevo(){
   const datos={
     nombre:document.getElementById('n_nombre').value,
