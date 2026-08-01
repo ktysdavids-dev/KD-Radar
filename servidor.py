@@ -475,7 +475,7 @@ a{color:var(--gold2)}
     <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
   </div>
 
-  <div id="modal" class="hide" style="position:fixed;inset:0;background:rgba(4,8,16,.75);display:flex;align-items:center;justify-content:center;z-index:50">
+  <div id="modal" class="hide" onclick="if(event.target===this)cerrarNuevo()" style="position:fixed;inset:0;background:rgba(4,8,16,.75);display:flex;align-items:center;justify-content:center;z-index:50">
     <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:420px;width:92%">
       <h3 style="font-family:Fraunces,serif;color:#fff;margin-bottom:12px">Añadir contacto</h3>
       <input id="n_nombre" placeholder="Nombre del negocio *" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
@@ -484,8 +484,8 @@ a{color:var(--gold2)}
       <input id="n_municipio" placeholder="Municipio" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
       <select id="n_nicho" style="width:100%;margin-bottom:14px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px"></select>
       <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button class="acc" onclick="cerrarNuevo()">Cancelar</button>
-        <button class="btn" onclick="guardarNuevo()">Guardar</button>
+        <button type="button" class="acc" onclick="cerrarNuevo()">Cancelar</button>
+        <button type="button" class="btn" onclick="guardarNuevo()">Guardar</button>
       </div>
       <p id="n_err" style="color:#e08585;font-size:13px;margin-top:8px"></p>
     </div>
@@ -622,15 +622,17 @@ function pintar(){
         ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank">WhatsApp</a>`:''}
         <button class="acc" title="Respondió" onclick="marcar(${l.id},'respondido')">💬</button>
         <button class="acc" title="Cliente" onclick="marcar(${l.id},'cliente')">⭐</button>
-        <button class="acc" title="Borrar" onclick="borrarLead(${l.id},'${(l.nombre||'').replace(/'/g,"\\\\'")}')">✕</button>
+        <button class="acc" title="Borrar" onclick="borrarLead(${l.id})">✕</button>
       </td></tr>`;
   }).join('') || '<tr><td colspan="4" class="empty">Sin leads en esta vista.</td></tr>';
 }
 async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
-async function borrarLead(id,nombre){
-  if(!confirm(`¿Borrar "${nombre}" definitivamente?`)) return;
-  try{ await api(`/api/lead/${id}`,{method:'DELETE'}); await cargar(); }catch(e){ alert('Error al borrar'); }
+async function borrarLead(id){
+  const l=LEADS.find(x=>x.id===id);
+  if(!confirm('¿Borrar "'+(l?l.nombre:'este lead')+'" definitivamente?')) return;
+  try{ await api('/api/lead/'+id,{method:'DELETE'}); await cargar(); }catch(e){ alert('Error al borrar'); }
 }
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') cerrarNuevo(); });
 async function limpiar(){
   if(!confirm('¿Borrar todos los leads sin ningún contacto (ni email ni teléfono)? No se pueden recuperar.')) return;
   try{ const r=await api('/api/limpiar-sin-contacto',{method:'POST'}); alert(r.mensaje); await cargar(); }catch(e){ alert('Error'); }
