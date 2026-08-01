@@ -314,6 +314,39 @@ def api_toggle_cliente(lead_id: int, x_api_key: str | None = Header(default=None
     return {"ok": True, "estado": nuevo, "es_cliente": nuevo == "cliente"}
 
 
+@app.get("/api/exportar.csv")
+def api_exportar_csv(solo_contacto: int = 1,
+                     x_api_key: str | None = Header(default=None)):
+    """Descarga los leads en CSV (para Excel/Numbers). Por defecto solo los
+    que tienen algún contacto (email o teléfono)."""
+    verificar(x_api_key)
+    import csv, io
+    filtro = ("WHERE (email IS NOT NULL AND email!='') OR "
+              "(telefono IS NOT NULL AND telefono!='')") if solo_contacto else ""
+    with conexion() as con:
+        filas = con.execute(
+            f"""SELECT nombre, nicho, municipio, provincia, email, telefono,
+                       web, rating, num_resenas, estado, llamado,
+                       email_abierto, visito_informe, creado_en
+                FROM leads {filtro} ORDER BY nicho, municipio, nombre""").fetchall()
+    buf = io.StringIO()
+    buf.write("\ufeff")  # BOM para que Excel/Numbers lea bien los acentos
+    w = csv.writer(buf)
+    w.writerow(["Negocio", "Nicho", "Municipio", "Provincia", "Email",
+                "Teléfono", "Web", "Rating", "Reseñas", "Estado",
+                "Llamado", "Abrió email", "Vio informe", "Capturado"])
+    for r in filas:
+        r = dict(r)
+        w.writerow([r["nombre"], r["nicho"], r["municipio"], r["provincia"],
+                    r["email"] or "", r["telefono"] or "", r["web"] or "",
+                    r["rating"] or "", r["num_resenas"] or "", r["estado"],
+                    "Sí" if r["llamado"] else "", "Sí" if r["email_abierto"] else "",
+                    "Sí" if r["visito_informe"] else "", (r["creado_en"] or "")[:10]])
+    from fastapi.responses import Response as R
+    return R(content=buf.getvalue(), media_type="text/csv",
+             headers={"Content-Disposition": "attachment; filename=kd-radar-leads.csv"})
+
+
 @app.post("/api/lead/{lead_id}/enviar")
 def api_enviar_directo(lead_id: int, x_api_key: str | None = Header(default=None)):
     """Envía AHORA el email a un lead concreto (botón del panel).
@@ -550,6 +583,7 @@ a{color:var(--gold2)}
     <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
     <select id="fmunicipio" onchange="pintar()"><option value="">Todos los municipios</option></select>
+    <button class="acc" style="border-color:#3a5a3a;color:#7bd99a" onclick="descargarCSV()">⬇ Descargar CSV</button>
     <button class="acc" style="border-color:#3a5a3a;color:#7bd99a" onclick="abrirNuevo()">➕ Añadir contacto</button>
     <button class="acc" style="border-color:var(--gold2);color:var(--gold)" onclick="redactarAhora()">✍️ Redactar ahora</button>
     <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
@@ -713,6 +747,18 @@ function pintar(){
         <button class="acc" title="Borrar" onclick="borrarLead(${l.id})">✕</button>
       </td></tr>`;
   }).join('') || '<tr><td colspan="4" class="empty">Sin leads en esta vista.</td></tr>';
+}
+async function descargarCSV(){
+  try{
+    const r=await fetch('/api/exportar.csv?solo_contacto=1',{headers:{'X-API-Key':clave()}});
+    if(!r.ok){ alert('Error al descargar'); return; }
+    const blob=await r.blob();
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url; a.download='kd-radar-leads.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert('Error al descargar el CSV'); }
 }
 async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
 async function toggleCliente(id){
