@@ -281,7 +281,7 @@ def redactar(lead: dict) -> dict | None:
         }],
     }
     headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
+        "x-api-key": (ANTHROPIC_API_KEY or "").strip().replace("\n", "").replace("\r", ""),
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }

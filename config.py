@@ -5,8 +5,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+def _limpiar(valor: str) -> str:
+    """Quita espacios, tabuladores y saltos de línea invisibles que a veces
+    se cuelan al pegar claves en las variables de entorno. Una cabecera HTTP
+    no admite \\n, así que esto evita el error 'Illegal header value'."""
+    return (valor or "").strip().strip("\r\n").strip()
+
+
+GOOGLE_PLACES_API_KEY = _limpiar(os.getenv("GOOGLE_PLACES_API_KEY", ""))
+ANTHROPIC_API_KEY = _limpiar(os.getenv("ANTHROPIC_API_KEY", ""))
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
 REMITENTE_NOMBRE = os.getenv("REMITENTE_NOMBRE", "Ktys & Davids")
 REMITENTE_EMAIL = os.getenv("REMITENTE_EMAIL", "hola@ktysdavids.com")
@@ -14,7 +21,7 @@ REMITENTE_EMAIL = os.getenv("REMITENTE_EMAIL", "hola@ktysdavids.com")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.ionos.es")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "hola@ktysdavids.com")
-SMTP_PASS = os.getenv("SMTP_PASS", "")
+SMTP_PASS = _limpiar(os.getenv("SMTP_PASS", ""))
 EMPRESA_LEGAL = os.getenv("EMPRESA_LEGAL", "Ktys & Davids Productions S.L.")
 LOTE_DIARIO = int(os.getenv("LOTE_DIARIO", "30"))
 DB_PATH = os.getenv("DB_PATH", "kd_radar.db")
