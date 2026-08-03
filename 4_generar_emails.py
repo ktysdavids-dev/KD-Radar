@@ -285,17 +285,33 @@ def redactar(lead: dict) -> dict | None:
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
-    # Reintentos con espera creciente por si la conexión es intermitente
+    # Reintentos SOLO para errores de red/sobrecarga, no para respuestas vacías
     for intento in range(3):
         try:
             with httpx.Client(timeout=45) as cliente:
                 r = cliente.post(ANTHROPIC_URL, headers=headers, json=payload)
             if r.status_code == 200:
-                texto = r.json()["content"][0]["text"].strip()
+                try:
+                    contenido = r.json().get("content", [])
+                    texto = contenido[0]["text"].strip() if contenido else ""
+                except (ValueError, KeyError, IndexError, TypeError):
+                    texto = ""
+                if not texto:
+                    print("  [AVISO] respuesta vacía de la API; se salta este lead")
+                    return None
+                # Limpiar posibles ```json ... ```
                 if texto.startswith("```"):
                     texto = texto.strip("`").removeprefix("json").strip()
-                datos = json.loads(texto)
-                if datos.get("asunto") and datos.get("cuerpo"):
+                # Extraer solo el bloque JSON (por si viene texto alrededor)
+                ini, fin = texto.find("{"), texto.rfind("}")
+                if ini != -1 and fin != -1 and fin > ini:
+                    texto = texto[ini:fin + 1]
+                try:
+                    datos = json.loads(texto)
+                except json.JSONDecodeError:
+                    print("  [AVISO] la API no devolvió JSON válido; se salta este lead")
+                    return None
+                if isinstance(datos, dict) and datos.get("asunto") and datos.get("cuerpo"):
                     return datos
                 return None
             if r.status_code in (429, 529) or r.status_code >= 500:
@@ -303,8 +319,8 @@ def redactar(lead: dict) -> dict | None:
                 continue
             print(f"  [ERROR HTTP {r.status_code}] {r.text[:160]}")
             return None
-        except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError) as e:
-            print(f"  [ERROR {type(e).__name__}: {e}] intento {intento + 1}/3")
+        except httpx.HTTPError as e:
+            print(f"  [ERROR red {type(e).__name__}] intento {intento + 1}/3")
             time.sleep(2 * (intento + 1))
     return None
 
