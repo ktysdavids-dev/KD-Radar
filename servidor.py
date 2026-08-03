@@ -668,7 +668,7 @@ function pasaFiltroTab(l,tab){
     case 'sinllamar': return tieneTel(l) && !l.llamado && l.estado!=='excluido';
     case 'listos': return l.estado==='redactado';
     case 'enviados': return ['enviado','respondido','cliente'].includes(l.estado);
-    case 'calientes': return !!l.visito_informe;
+    case 'calientes': return !!l.visito_informe && l.estado!=='cliente';
     case 'abiertos': return !!l.email_abierto;
     case 'respondidos': return l.estado==='respondido';
     case 'clientes': return l.estado==='cliente';
@@ -714,7 +714,7 @@ function pintar(){
     tel:LEADS.filter(l=>!tieneEmail(l)&&tieneTel(l)).length,
     listos:LEADS.filter(l=>l.estado==='redactado').length,
     enviados:LEADS.filter(l=>['enviado','respondido','cliente'].includes(l.estado)).length,
-    calientes:LEADS.filter(l=>l.visito_informe).length,
+    calientes:LEADS.filter(l=>l.visito_informe && l.estado!=='excluido' && l.estado!=='cliente').length,
     clientes:LEADS.filter(l=>l.estado==='cliente').length,
   };
   document.getElementById('stats').innerHTML=
