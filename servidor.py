@@ -28,7 +28,7 @@ from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, Response
 
 from config import (LOTE_DIARIO, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
-                    REMITENTE_NOMBRE, REMITENTE_EMAIL)
+                    REMITENTE_NOMBRE, REMITENTE_EMAIL, BASE_URL)
 from db import (init_db, conexion, lote_para_envio, actualizar_lead,
                 excluir_email, stats, stats_por_nicho, ahora)
 from motor import ejecutar_prospeccion, estado_motor, siguientes_combos
@@ -250,6 +250,58 @@ ESTADOS_MANUALES = {"respondido", "cliente", "descartado", "redactado",
                     "enviado", "auditado", "sin_email"}
 
 
+def _movil_es(telefono: str | None) -> str | None:
+    """Devuelve 34XXXXXXXXX si es móvil español (6xx/7xx), si no None."""
+    if not telefono:
+        return None
+    import re as _re
+    d = _re.sub(r"\D", "", telefono)
+    n = d[-9:]
+    return "34" + n if n and n[0] in ("6", "7") else None
+
+
+# Mensaje de WhatsApp por nicho (gancho corto + enlace al informe)
+_WA_MENSAJE = {
+    "restaurantes": ("Hola! Soy David, de Ktys & Davids 👋 He echado un vistazo a "
+                     "{nombre} y os he preparado un análisis rápido de vuestra "
+                     "presencia online. He visto un par de cosas que os están "
+                     "costando clientes (sobre todo con las llamadas en hora punta). "
+                     "Te lo dejo aquí, tardas 30 seg en verlo 👇\n{informe}\n\n"
+                     "Trabajo con restaurantes de la zona automatizando pedidos y "
+                     "reservas con IA. ¿Le echas un ojo y me dices?"),
+    "barberias": ("Hola! Soy David, de Ktys & Davids 👋 Le he echado un vistazo a "
+                  "{nombre} y os preparé un análisis rápido. Vi que se os pueden "
+                  "estar escapando citas cuando estáis atendiendo. Míralo aquí, "
+                  "son 30 seg 👇\n{informe}\n\nAutomatizo las citas por teléfono y "
+                  "WhatsApp para barberías. ¿Te cuadra que hablemos?"),
+    "estetica": ("Hola! Soy David, de Ktys & Davids 👋 Preparé un análisis rápido "
+                 "de {nombre}. Vi cosas mejorables para que no se os escapen citas "
+                 "ni reservas. Te lo dejo aquí 👇\n{informe}\n\nAutomatizo citas y "
+                 "recordatorios por WhatsApp. ¿Le echas un ojo?"),
+    "talleres": ("Hola! Soy David, de Ktys & Davids 👋 Le eché un vistazo a "
+                 "{nombre} y os preparé un análisis. Vi que se pueden perder "
+                 "llamadas de clientes mientras estáis en faena. Míralo 👇\n"
+                 "{informe}\n\nAutomatizo la recepción de llamadas y citas para "
+                 "talleres. ¿Hablamos?"),
+}
+_WA_DEFECTO = ("Hola! Soy David, de Ktys & Davids 👋 He preparado un análisis "
+               "rápido de {nombre} con un par de mejoras para que no se os "
+               "escapen clientes. Te lo dejo aquí, 30 seg 👇\n{informe}\n\n"
+               "Automatizo la atención al cliente con IA. ¿Le echas un ojo?")
+
+
+def _whatsapp_url(lead: dict) -> str | None:
+    from urllib.parse import quote
+    movil = _movil_es(lead.get("telefono"))
+    if not movil:
+        return None
+    plantilla = _WA_MENSAJE.get(lead.get("nicho") or "", _WA_DEFECTO)
+    informe = f"{BASE_URL}/informe/{lead.get('token_baja')}" if lead.get("token_baja") else ""
+    mensaje = plantilla.format(nombre=lead.get("nombre") or "vuestro negocio",
+                               informe=informe)
+    return f"https://wa.me/{movil}?text={quote(mensaje)}"
+
+
 @app.get("/api/leads")
 def api_leads(x_api_key: str | None = Header(default=None)):
     """CRM: todos los leads con sus señales (enviado, abierto, informe, baja)."""
@@ -259,12 +311,18 @@ def api_leads(x_api_key: str | None = Header(default=None)):
             """SELECT id, nombre, nicho, municipio, provincia, telefono, email,
                       web, rating, num_resenas, estado, email_abierto,
                       visito_informe, llamado, notas, recordatorio,
-                      resultado_llamada, actualizado_en
+                      resultado_llamada, token_baja, actualizado_en
                FROM leads ORDER BY
                  CASE WHEN visito_informe IS NOT NULL THEN 0
                       WHEN email_abierto IS NOT NULL THEN 1 ELSE 2 END,
                  actualizado_en DESC""").fetchall()
-        return [dict(f) for f in filas]
+        resultado = []
+        for f in filas:
+            d = dict(f)
+            d["whatsapp_url"] = _whatsapp_url(d)
+            d.pop("token_baja", None)  # no exponer el token en el listado
+            resultado.append(d)
+        return resultado
 
 
 @app.post("/api/lead/{lead_id}/estado/{nuevo}")
@@ -888,7 +946,7 @@ function pintar(){
       <td class="hidem">${chips(l)}</td>
       <td>
         ${tieneEmail(l) && l.estado!=='excluido' ? `<button class="acc" style="border-color:#3a5a3a;color:#7bd99a" title="Enviar email ahora" onclick="enviarEmail(${l.id})">✉ Enviar</button>` : ''}
-        ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank" title="Abrir WhatsApp">WhatsApp</a>`:''}
+        ${l.whatsapp_url?`<a class="acc wa" href="${l.whatsapp_url}" target="_blank" title="WhatsApp con mensaje e informe listo">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
         ${tieneTel(l)?`<button class="acc" style="border-color:#3a4a5a;color:#7cc4ef" title="Gestión de llamada" onclick="gestionLead(${l.id})">📋 Gestión</button>`:''}
         <button class="acc" title="Editar" onclick="editarLead(${l.id})">✎</button>
