@@ -347,6 +347,27 @@ def api_exportar_csv(solo_contacto: int = 1,
              headers={"Content-Disposition": "attachment; filename=kd-radar-leads.csv"})
 
 
+@app.post("/api/lead/{lead_id}/editar")
+def api_editar_lead(lead_id: int, datos: dict,
+                    x_api_key: str | None = Header(default=None)):
+    """Edita los datos de un lead (nombre, email, teléfono, municipio, nicho, web)."""
+    verificar(x_api_key)
+    with conexion() as con:
+        if not con.execute("SELECT 1 FROM leads WHERE id=?", (lead_id,)).fetchone():
+            raise HTTPException(404, "Lead no encontrado")
+    campos = {}
+    for k in ("nombre", "email", "telefono", "municipio", "nicho", "web"):
+        if k in datos:
+            v = (datos[k] or "").strip()
+            campos[k] = v or None
+    if "email" in campos and campos["email"]:
+        campos["email"] = campos["email"].lower()
+    if not campos:
+        raise HTTPException(400, "Nada que actualizar")
+    actualizar_lead(lead_id, **campos)
+    return {"ok": True, "id": lead_id}
+
+
 @app.post("/api/lead/{lead_id}/enviar")
 def api_enviar_directo(lead_id: int, x_api_key: str | None = Header(default=None)):
     """Envía AHORA el email a un lead concreto (botón del panel).
@@ -583,10 +604,33 @@ a{color:var(--gold2)}
     <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
     <select id="fmunicipio" onchange="pintar()"><option value="">Todos los municipios</option></select>
+    <select id="forden" onchange="pintar()">
+      <option value="">Orden por defecto</option>
+      <option value="az">Nombre A-Z</option>
+      <option value="za">Nombre Z-A</option>
+      <option value="rating">Mejor valorados</option>
+      <option value="municipio">Por municipio</option>
+    </select>
     <button class="acc" style="border-color:#3a5a3a;color:#7bd99a" onclick="descargarCSV()">⬇ Descargar CSV</button>
     <button class="acc" style="border-color:#3a5a3a;color:#7bd99a" onclick="abrirNuevo()">➕ Añadir contacto</button>
     <button class="acc" style="border-color:var(--gold2);color:var(--gold)" onclick="redactarAhora()">✍️ Redactar ahora</button>
     <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
+  </div>
+
+  <div id="modalEditar" onclick="if(event.target===this)cerrarEditar()" style="display:none;position:fixed;inset:0;background:rgba(4,8,16,.75);align-items:center;justify-content:center;z-index:50">
+    <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:420px;width:92%">
+      <h3 style="font-family:Fraunces,serif;color:#fff;margin-bottom:12px">Editar lead</h3>
+      <input id="e_nombre" placeholder="Nombre" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="e_email" placeholder="Email" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="e_tel" placeholder="Teléfono" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="e_municipio" placeholder="Municipio" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="e_web" placeholder="Web" style="width:100%;margin-bottom:14px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button type="button" class="acc" onclick="cerrarEditar()">Cancelar</button>
+        <button type="button" class="btn" onclick="guardarEditar()">Guardar</button>
+      </div>
+      <p id="e_err" style="color:#e08585;font-size:13px;margin-top:8px"></p>
+    </div>
   </div>
 
   <div id="modal" onclick="if(event.target===this)cerrarNuevo()" style="display:none;position:fixed;inset:0;background:rgba(4,8,16,.75);align-items:center;justify-content:center;z-index:50">
@@ -727,6 +771,11 @@ function pintar(){
      <div class="stat"><b>${s.clientes}</b><i>⭐ Clientes</i></div>`;
   // filas visibles
   const vis=base.filter(l=>pasaFiltroTab(l,FILTRO));
+  const orden=document.getElementById('forden').value;
+  if(orden==='az') vis.sort((a,b)=>(a.nombre||'').localeCompare(b.nombre||''));
+  else if(orden==='za') vis.sort((a,b)=>(b.nombre||'').localeCompare(a.nombre||''));
+  else if(orden==='rating') vis.sort((a,b)=>(b.rating||0)-(a.rating||0));
+  else if(orden==='municipio') vis.sort((a,b)=>(a.municipio||'').localeCompare(b.municipio||'')||(a.nombre||'').localeCompare(b.nombre||''));
   document.getElementById('count').textContent=`${vis.length} resultados`;
   const el=document.getElementById('cuerpo');
   el.innerHTML=vis.map(l=>{
@@ -743,6 +792,7 @@ function pintar(){
         ${tieneEmail(l) && l.estado!=='excluido' ? `<button class="acc" style="border-color:#3a5a3a;color:#7bd99a" title="Enviar email ahora" onclick="enviarEmail(${l.id})">✉ Enviar</button>` : ''}
         ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank" title="Abrir WhatsApp">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
+        <button class="acc" title="Editar" onclick="editarLead(${l.id})">✎</button>
         <button class="acc" style="${l.estado==='cliente'?'border-color:var(--gold);color:var(--gold);background:#3a2b06':''}" title="${l.estado==='cliente'?'Es cliente (clic para quitar)':'Marcar cliente'}" onclick="toggleCliente(${l.id})">${l.estado==='cliente'?'⭐ Cliente':'☆'}</button>
         <button class="acc" title="Borrar" onclick="borrarLead(${l.id})">✕</button>
       </td></tr>`;
@@ -759,6 +809,32 @@ async function descargarCSV(){
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }catch(e){ alert('Error al descargar el CSV'); }
+}
+let editandoId=null;
+function editarLead(id){
+  const l=LEADS.find(x=>x.id===id); if(!l) return;
+  editandoId=id;
+  document.getElementById('e_nombre').value=l.nombre||'';
+  document.getElementById('e_email').value=l.email||'';
+  document.getElementById('e_tel').value=l.telefono||'';
+  document.getElementById('e_municipio').value=l.municipio||'';
+  document.getElementById('e_web').value=l.web||'';
+  document.getElementById('e_err').textContent='';
+  document.getElementById('modalEditar').style.display='flex';
+}
+function cerrarEditar(){ document.getElementById('modalEditar').style.display='none'; }
+async function guardarEditar(){
+  const datos={
+    nombre:document.getElementById('e_nombre').value,
+    email:document.getElementById('e_email').value,
+    telefono:document.getElementById('e_tel').value,
+    municipio:document.getElementById('e_municipio').value,
+    web:document.getElementById('e_web').value,
+  };
+  try{
+    await api('/api/lead/'+editandoId+'/editar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datos)});
+    cerrarEditar(); await cargar();
+  }catch(e){ document.getElementById('e_err').textContent=e.message||'Error'; }
 }
 async function marcar(id,estado){ try{ await api(`/api/lead/${id}/estado/${estado}`,{method:'POST'}); await cargar(); }catch(e){} }
 async function toggleCliente(id){
