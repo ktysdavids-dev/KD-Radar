@@ -258,7 +258,8 @@ def api_leads(x_api_key: str | None = Header(default=None)):
         filas = con.execute(
             """SELECT id, nombre, nicho, municipio, provincia, telefono, email,
                       web, rating, num_resenas, estado, email_abierto,
-                      visito_informe, llamado, actualizado_en
+                      visito_informe, llamado, notas, recordatorio,
+                      resultado_llamada, actualizado_en
                FROM leads ORDER BY
                  CASE WHEN visito_informe IS NOT NULL THEN 0
                       WHEN email_abierto IS NOT NULL THEN 1 ELSE 2 END,
@@ -345,6 +346,42 @@ def api_exportar_csv(solo_contacto: int = 1,
     from fastapi.responses import Response as R
     return R(content=buf.getvalue(), media_type="text/csv",
              headers={"Content-Disposition": "attachment; filename=kd-radar-leads.csv"})
+
+
+RESULTADOS_LLAMADA = {"", "contactado", "no_contesta", "volver_llamar",
+                      "no_interesado", "cita_agendada", "buzon"}
+
+
+@app.post("/api/lead/{lead_id}/gestion")
+def api_gestion(lead_id: int, datos: dict,
+                x_api_key: str | None = Header(default=None)):
+    """Guarda la gestión comercial de un lead: notas, resultado de la llamada,
+    y recordatorio (fecha/hora para volver a llamar). Todo lo que necesitas
+    para no perder el hilo con 100 llamadas al día."""
+    verificar(x_api_key)
+    with conexion() as con:
+        if not con.execute("SELECT 1 FROM leads WHERE id=?", (lead_id,)).fetchone():
+            raise HTTPException(404, "Lead no encontrado")
+    campos = {}
+    if "notas" in datos:
+        campos["notas"] = (datos["notas"] or "").strip() or None
+    if "resultado" in datos:
+        res = (datos["resultado"] or "").strip()
+        if res not in RESULTADOS_LLAMADA:
+            raise HTTPException(400, f"Resultado no válido: {sorted(RESULTADOS_LLAMADA)}")
+        campos["resultado_llamada"] = res or None
+        # Marcar como llamado automáticamente si hay un resultado
+        if res:
+            campos["llamado"] = ahora()
+    if "recordatorio" in datos:
+        # Espera ISO 'YYYY-MM-DDTHH:MM' o vacío para quitarlo
+        campos["recordatorio"] = (datos["recordatorio"] or "").strip() or None
+    if "marcar_llamado" in datos:
+        campos["llamado"] = ahora() if datos["marcar_llamado"] else None
+    if not campos:
+        raise HTTPException(400, "Nada que guardar")
+    actualizar_lead(lead_id, **campos)
+    return {"ok": True, "id": lead_id}
 
 
 @app.post("/api/lead/{lead_id}/editar")
@@ -600,6 +637,7 @@ a{color:var(--gold2)}
 
 <div class="wrap hide" id="app">
   <div class="stats" id="stats"></div>
+  <div id="avisoRec" style="display:none;background:#3a2b06;border:1px solid var(--gold2);color:var(--gold);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px"></div>
   <div class="bar">
     <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
@@ -615,6 +653,44 @@ a{color:var(--gold2)}
     <button class="acc" style="border-color:#3a5a3a;color:#7bd99a" onclick="abrirNuevo()">➕ Añadir contacto</button>
     <button class="acc" style="border-color:var(--gold2);color:var(--gold)" onclick="redactarAhora()">✍️ Redactar ahora</button>
     <button class="acc" style="border-color:#5a3a3a;color:#e08585" onclick="limpiar()">🗑 Limpiar sin contacto</button>
+  </div>
+
+  <div id="modalGestion" onclick="if(event.target===this)cerrarGestion()" style="display:none;position:fixed;inset:0;background:rgba(4,8,16,.8);align-items:center;justify-content:center;z-index:50">
+    <div style="background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:480px;width:94%;max-height:90vh;overflow-y:auto">
+      <h3 style="font-family:Fraunces,serif;color:#fff;margin-bottom:4px" id="g_titulo">Gestión de llamada</h3>
+      <p id="g_sub" style="color:var(--mut);font-size:13px;margin-bottom:16px"></p>
+
+      <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">¿CÓMO FUE LA LLAMADA?</label>
+      <select id="g_resultado" style="width:100%;margin:6px 0 14px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px">
+        <option value="">— Sin marcar —</option>
+        <option value="contactado">✓ Hablé con el dueño/encargado</option>
+        <option value="no_contesta">No contesta</option>
+        <option value="buzon">Saltó el buzón</option>
+        <option value="volver_llamar">↻ Volver a llamar</option>
+        <option value="cita_agendada">📅 Cita/demo agendada</option>
+        <option value="no_interesado">✗ No le interesa</option>
+      </select>
+
+      <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">NOTAS (con quién hablé, qué dijo, qué necesita...)</label>
+      <textarea id="g_notas" rows="4" placeholder="Ej: Hablé con Pepe, el dueño. Le interesa Nora pero quiere pensarlo. Volver a llamar el viernes por la mañana." style="width:100%;margin:6px 0 14px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit;resize:vertical"></textarea>
+
+      <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">⏰ RECORDATORIO — ¿cuándo vuelvo a llamar?</label>
+      <input id="g_recordatorio" type="datetime-local" style="width:100%;margin:6px 0 6px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+        <button type="button" class="acc" onclick="recRapido(2)">En 2h</button>
+        <button type="button" class="acc" onclick="recRapido(24)">Mañana</button>
+        <button type="button" class="acc" onclick="recRapido(24,10)">Mañana 10:00</button>
+        <button type="button" class="acc" onclick="recRapido(24,16)">Mañana 16:00</button>
+        <button type="button" class="acc" onclick="recRapido(72)">En 3 días</button>
+        <button type="button" class="acc" onclick="document.getElementById('g_recordatorio').value=''">Quitar</button>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button type="button" class="acc" onclick="cerrarGestion()">Cancelar</button>
+        <button type="button" class="btn" onclick="guardarGestion()">Guardar gestión</button>
+      </div>
+      <p id="g_err" style="color:#e08585;font-size:13px;margin-top:8px"></p>
+    </div>
   </div>
 
   <div id="modalEditar" onclick="if(event.target===this)cerrarEditar()" style="display:none;position:fixed;inset:0;background:rgba(4,8,16,.75);align-items:center;justify-content:center;z-index:50">
@@ -664,6 +740,7 @@ const TABS=[
   ['completos','✅ Con email'],
   ['solotel','📱 Solo teléfono'],
   ['sincontacto','⚠️ Sin contacto'],
+  ['recordatorios','⏰ Recordatorios'],
   ['llamados','📞 Llamados'],
   ['sinllamar','☎️ Sin llamar'],
   ['listos','✍️ Listos p/ enviar'],
@@ -699,6 +776,14 @@ async function cargar(){
   const muns=[...new Set(LEADS.map(l=>l.municipio).filter(Boolean))].sort();
   document.getElementById('fmunicipio').innerHTML='<option value="">Todos los municipios</option>'+
     muns.map(m=>`<option>${m}</option>`).join('');
+  // Aviso de recordatorios vencidos (para no perder ninguna llamada)
+  const ahora=new Date();
+  const vencidos=LEADS.filter(l=>l.recordatorio && new Date(l.recordatorio)<=ahora && l.estado!=='excluido').length;
+  const aviso=document.getElementById('avisoRec');
+  if(vencidos>0){
+    aviso.style.display='block';
+    aviso.innerHTML=`⏰ Tienes <b>${vencidos}</b> ${vencidos===1?'llamada pendiente':'llamadas pendientes'} para ahora. <span style="text-decoration:underline;cursor:pointer" onclick="FILTRO='recordatorios';pintar();document.getElementById('cuerpo').scrollIntoView()">Ver recordatorios →</span>`;
+  } else { aviso.style.display='none'; }
   pintar();
 }
 function pasaFiltroTab(l,tab){
@@ -708,6 +793,7 @@ function pasaFiltroTab(l,tab){
     case 'completos': return tieneEmail(l);
     case 'solotel': return !tieneEmail(l) && tieneTel(l);
     case 'sincontacto': return !tieneEmail(l) && !tieneTel(l);
+    case 'recordatorios': return !!l.recordatorio && l.estado!=='excluido';
     case 'llamados': return !!l.llamado;
     case 'sinllamar': return tieneTel(l) && !l.llamado && l.estado!=='excluido';
     case 'listos': return l.estado==='redactado';
@@ -738,6 +824,14 @@ function chips(l){
   if(l.estado==='enviado') h+='<span class="chip c-env">📤 Enviado</span>';
   if(l.estado==='redactado') h+='<span class="chip c-red">✍️ Listo</span>';
   if(l.estado==='excluido') h+='<span class="chip c-baja">🚫 Baja</span>';
+  if(l.recordatorio){
+    const venc = new Date(l.recordatorio) <= new Date();
+    const et = {contactado:'✓ Contactado',no_contesta:'No contesta',volver_llamar:'↻ Volver a llamar',no_interesado:'✗ No interesado',cita_agendada:'📅 Cita',buzon:'Buzón'};
+    const fecha = new Date(l.recordatorio).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
+    h+=`<span class="chip" style="background:${venc?'#4a1a1a':'#1a3a4a'};color:${venc?'#ff9a9a':'#7cc4ef'};border:1px solid ${venc?'#e08585':'#3a5a6a'}">⏰ ${venc?'¡AHORA! ':''}${fecha}</span>`;
+  }
+  const resNames={contactado:'✓ Contactado',no_contesta:'No contesta',volver_llamar:'↻ Rellamar',no_interesado:'✗ No interesa',cita_agendada:'📅 Cita agendada',buzon:'Buzón'};
+  if(l.resultado_llamada && resNames[l.resultado_llamada]) h+=`<span class="chip" style="background:#2a2438;color:#c4a8e0">${resNames[l.resultado_llamada]}</span>`;
   if(l.llamado) h+='<span class="chip" style="background:#3d2a1a;color:#e0a585">📞 Llamado</span>';
   if(tieneEmail(l)) h+='<span class="chip c-mail">✉ Email</span>';
   else if(tieneTel(l)) h+='<span class="chip c-tel">📱 Tel</span>';
@@ -776,6 +870,10 @@ function pintar(){
   else if(orden==='za') vis.sort((a,b)=>(b.nombre||'').localeCompare(a.nombre||''));
   else if(orden==='rating') vis.sort((a,b)=>(b.rating||0)-(a.rating||0));
   else if(orden==='municipio') vis.sort((a,b)=>(a.municipio||'').localeCompare(b.municipio||'')||(a.nombre||'').localeCompare(b.nombre||''));
+  // Recordatorios: ordenar por fecha (los más urgentes primero)
+  if(FILTRO==='recordatorios'){
+    vis.sort((a,b)=> new Date(a.recordatorio) - new Date(b.recordatorio));
+  }
   document.getElementById('count').textContent=`${vis.length} resultados`;
   const el=document.getElementById('cuerpo');
   el.innerHTML=vis.map(l=>{
@@ -792,6 +890,7 @@ function pintar(){
         ${tieneEmail(l) && l.estado!=='excluido' ? `<button class="acc" style="border-color:#3a5a3a;color:#7bd99a" title="Enviar email ahora" onclick="enviarEmail(${l.id})">✉ Enviar</button>` : ''}
         ${m?`<a class="acc wa" href="https://wa.me/${m}" target="_blank" title="Abrir WhatsApp">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
+        ${tieneTel(l)?`<button class="acc" style="border-color:#3a4a5a;color:#7cc4ef" title="Gestión de llamada" onclick="gestionLead(${l.id})">📋 Gestión</button>`:''}
         <button class="acc" title="Editar" onclick="editarLead(${l.id})">✎</button>
         <button class="acc" style="${l.estado==='cliente'?'border-color:var(--gold);color:var(--gold);background:#3a2b06':''}" title="${l.estado==='cliente'?'Es cliente (clic para quitar)':'Marcar cliente'}" onclick="toggleCliente(${l.id})">${l.estado==='cliente'?'⭐ Cliente':'☆'}</button>
         <button class="acc" title="Borrar" onclick="borrarLead(${l.id})">✕</button>
@@ -809,6 +908,38 @@ async function descargarCSV(){
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }catch(e){ alert('Error al descargar el CSV'); }
+}
+let gestionId=null;
+function gestionLead(id){
+  const l=LEADS.find(x=>x.id===id); if(!l) return;
+  gestionId=id;
+  document.getElementById('g_titulo').textContent='Gestión · '+l.nombre;
+  document.getElementById('g_sub').textContent=(l.telefono||'')+' · '+(l.municipio||'')+' · '+(l.nicho||'');
+  document.getElementById('g_resultado').value=l.resultado_llamada||'';
+  document.getElementById('g_notas').value=l.notas||'';
+  // recordatorio: convertir ISO a formato datetime-local (sin segundos ni Z)
+  document.getElementById('g_recordatorio').value=l.recordatorio ? l.recordatorio.slice(0,16) : '';
+  document.getElementById('g_err').textContent='';
+  document.getElementById('modalGestion').style.display='flex';
+}
+function cerrarGestion(){ document.getElementById('modalGestion').style.display='none'; }
+function recRapido(horas, horaFija){
+  const d=new Date(); d.setHours(d.getHours()+horas);
+  if(horaFija!==undefined){ d.setHours(horaFija,0,0,0); }
+  // formato YYYY-MM-DDTHH:MM en hora local
+  const p=n=>String(n).padStart(2,'0');
+  document.getElementById('g_recordatorio').value=`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function guardarGestion(){
+  const datos={
+    resultado:document.getElementById('g_resultado').value,
+    notas:document.getElementById('g_notas').value,
+    recordatorio:document.getElementById('g_recordatorio').value,
+  };
+  try{
+    await api('/api/lead/'+gestionId+'/gestion',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(datos)});
+    cerrarGestion(); await cargar();
+  }catch(e){ document.getElementById('g_err').textContent=e.message||'Error'; }
 }
 let editandoId=null;
 function editarLead(id){

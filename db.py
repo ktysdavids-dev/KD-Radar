@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS leads (
     visito_informe TEXT,
     email_abierto TEXT,
     llamado TEXT,
+    notas TEXT,
+    recordatorio TEXT,
+    resultado_llamada TEXT,
     estado TEXT DEFAULT 'nuevo',
     nicho TEXT DEFAULT 'restaurantes',
     token_baja TEXT UNIQUE,
@@ -103,6 +106,12 @@ def init_db():
             con.execute("ALTER TABLE leads ADD COLUMN email_abierto TEXT")
         if "llamado" not in columnas:
             con.execute("ALTER TABLE leads ADD COLUMN llamado TEXT")
+        if "notas" not in columnas:
+            con.execute("ALTER TABLE leads ADD COLUMN notas TEXT")
+        if "recordatorio" not in columnas:
+            con.execute("ALTER TABLE leads ADD COLUMN recordatorio TEXT")
+        if "resultado_llamada" not in columnas:
+            con.execute("ALTER TABLE leads ADD COLUMN resultado_llamada TEXT")
         con.execute("CREATE INDEX IF NOT EXISTS idx_nicho ON leads(nicho)")
 
 
