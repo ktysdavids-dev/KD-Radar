@@ -343,6 +343,35 @@ def informe(token: str):
 </body></html>"""
 
 
+@app.get("/api/lead/{lead_id}/ver-informe", response_class=HTMLResponse)
+def api_ver_informe(lead_id: int, x_api_key: str | None = Header(default=None)):
+    """Muestra el informe de un lead para uso INTERNO (David, antes de llamar).
+    NO marca el informe como visto: el chip 'vio informe' solo debe activarse
+    cuando lo abre el cliente desde el email/WhatsApp, no cuando lo revisas tú."""
+    verificar(x_api_key)
+    with conexion() as con:
+        fila = con.execute("SELECT token_baja, visito_informe FROM leads WHERE id=?",
+                           (lead_id,)).fetchone()
+    if not fila:
+        raise HTTPException(404, "Lead no encontrado")
+    ya_visto = fila["visito_informe"]  # guardamos el estado previo
+    resp = informe(fila["token_baja"])
+    # Deshacer el marcado que hace informe(): si el cliente no lo había visto,
+    # lo dejamos como estaba (sin marcar), porque esta apertura es tuya.
+    if not ya_visto:
+        actualizar_lead(lead_id, visito_informe=None)
+    html = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+    # Banner discreto arriba avisando que es la vista interna
+    banner = ('<div style="background:#0A1628;color:#D4AF37;text-align:center;'
+              'padding:8px;font-family:Arial,sans-serif;font-size:12px;letter-spacing:1px;">'
+              'VISTA INTERNA · no cuenta como visto por el cliente</div>')
+    # Insertar el banner justo después de abrir el <body>
+    idx = html.find(">", html.find("<body"))
+    if idx != -1:
+        html = html[:idx+1] + banner + html[idx+1:]
+    return HTMLResponse(content=html)
+
+
 @app.get("/informe/{token}/pdf", response_class=HTMLResponse)
 def informe_pdf(token: str):
     """Versión imprimible del informe: abre el diálogo de impresión del
@@ -455,7 +484,10 @@ def api_leads(x_api_key: str | None = Header(default=None)):
         for f in filas:
             d = dict(f)
             d["whatsapp_url"] = _whatsapp_url(d)
-            d.pop("token_baja", None)  # no exponer el token en el listado
+            # ¿tiene informe generado? (auditado con puntos de dolor)
+            d["tiene_informe"] = bool(d.get("estado") in ("auditado", "redactado",
+                                       "enviado", "respondido", "cliente"))
+            d.pop("token_baja", None)
             resultado.append(d)
         return resultado
 
@@ -1112,7 +1144,8 @@ function pintar(){
       <td class="hidem">${chips(l)}</td>
       <td>
         ${tieneEmail(l) && l.estado!=='excluido' ? `<button class="acc" style="border-color:#3a5a3a;color:#7bd99a" title="Enviar email ahora" onclick="enviarEmail(${l.id})">✉ Enviar</button>` : ''}
-        <button class="acc" style="border-color:#5a4a2a;color:#e0c085" title="Analizar web y detectar puntos de dolor (para su informe)" onclick="auditarLead(${l.id})">🔍 Auditar</button>
+        ${l.tiene_informe?`<button class="acc" style="border-color:#2a4a5a;color:#7cc4ef" title="Ver el informe de este lead (uso interno, no cuenta como visto)" onclick="verInforme(${l.id})">👁 Ver informe</button>`:''}
+        <button class="acc" style="border-color:#5a4a2a;color:#e0c085" title="Analizar web y detectar puntos de dolor (para su informe)" onclick="auditarLead(${l.id})">🔍 ${l.tiene_informe?'Re-auditar':'Auditar'}</button>
         ${l.whatsapp_url?`<a class="acc wa" href="${l.whatsapp_url}" target="_blank" title="WhatsApp con mensaje e informe listo">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
         ${tieneTel(l)?`<button class="acc" style="border-color:#3a4a5a;color:#7cc4ef" title="Gestión de llamada" onclick="gestionLead(${l.id})">📋 Gestión</button>`:''}
@@ -1133,6 +1166,16 @@ async function descargarCSV(){
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }catch(e){ alert('Error al descargar el CSV'); }
+}
+async function verInforme(id){
+  try{
+    const r=await fetch('/api/lead/'+id+'/ver-informe',{headers:{'X-API-Key':clave()}});
+    if(!r.ok){ alert('No se pudo abrir el informe. ¿Está auditado?'); return; }
+    const html=await r.text();
+    const w=window.open('','_blank');
+    if(w){ w.document.open(); w.document.write(html); w.document.close(); }
+    else alert('Permite las ventanas emergentes para ver el informe.');
+  }catch(e){ alert('Error al abrir el informe'); }
 }
 async function auditarLead(id){
   const l=LEADS.find(x=>x.id===id);
