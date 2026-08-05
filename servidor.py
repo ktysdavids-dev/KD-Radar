@@ -128,6 +128,75 @@ def api_enviado(lead_id: int, x_api_key: str | None = Header(default=None)):
     return {"ok": True, "id": lead_id, "fecha": ahora()}
 
 
+# Catálogo: cada dolor detectable -> solución concreta + producto + precio base.
+# El precio base es el de mercado; en el informe se aplica -40% (David no tiene
+# oficina, ni empleados, ni infraestructura -> precios imbatibles).
+SOLUCIONES = {
+    "sin_pedido_propio": {
+        "dolor": "Los pedidos entran solo por teléfono o dependéis de plataformas que se quedan hasta un 30% de comisión",
+        "solucion": "Nora (recepcionista IA) contesta y toma pedidos 24/7, y Qena os da carta QR con pedido propio sin comisiones",
+        "producto": "Nora + Qena", "precio": 890},
+    "sin_citas_online": {
+        "dolor": "No tenéis sistema de reservas/citas online: cada llamada perdida en hora punta es un cliente que se va a la competencia",
+        "solucion": "Nora atiende el teléfono con voz natural y agenda las citas/reservas sola, sin que soltéis lo que estáis haciendo",
+        "producto": "Nora", "precio": 690},
+    "sin_whatsapp": {
+        "dolor": "Sin WhatsApp automatizado: los no-shows (citas que no aparecen) os cuestan dinero cada semana",
+        "solucion": "Qenda envía recordatorios automáticos por WhatsApp y reduce drásticamente las citas perdidas",
+        "producto": "Qenda", "precio": 390},
+    "web_lenta": {
+        "dolor": "Vuestra web tarda demasiado en cargar: cada segundo de más son clientes que la cierran antes de veros",
+        "solucion": "Web rápida optimizada, carga en menos de 2 segundos y preparada para convertir visitas en clientes",
+        "producto": "Web KD", "precio": 490},
+    "sin_movil": {
+        "dolor": "La web no está bien optimizada para móvil, y ahí es donde os busca el 80% de vuestros clientes",
+        "solucion": "Rediseño responsive que se ve perfecto en el móvil y facilita que os llamen o reserven",
+        "producto": "Web KD", "precio": 490},
+    "sin_https_seo": {
+        "dolor": "Web sin HTTPS o sin SEO básico: Google os penaliza y perdéis visibilidad frente a competidores de la zona",
+        "solucion": "Certificado seguro + SEO local para que aparezcáis cuando os buscan en Google Maps y búsquedas cercanas",
+        "producto": "Web KD + SEO", "precio": 340},
+    "sin_web": {
+        "dolor": "No tenéis web propia o no responde: perdéis a todos los clientes que os buscan online cada día",
+        "solucion": "Web profesional con reservas, pedido y WhatsApp integrado, lista y funcionando en 72 horas",
+        "producto": "Web KD completa", "precio": 690},
+}
+
+# Mapea las claves de la auditoría a las soluciones del catálogo
+def _dolores_del_lead(auditoria: dict, lead: dict) -> list[dict]:
+    """Devuelve la lista de soluciones aplicables según lo detectado en la web."""
+    a = auditoria or {}
+    items: list[dict] = []
+    usados = set()
+
+    def add(clave):
+        if clave not in usados and clave in SOLUCIONES:
+            items.append(SOLUCIONES[clave]); usados.add(clave)
+
+    if a.get("sin_web") or not a.get("web_activa"):
+        add("sin_web")
+    else:
+        delivery = a.get("depende_plataformas_delivery")
+        if (lead.get("nicho") == "restaurantes"
+                and (delivery or not a.get("tiene_pedido_online_propio"))):
+            add("sin_pedido_propio")
+        if not a.get("tiene_citas_online"):
+            add("sin_citas_online")
+        if not a.get("tiene_whatsapp"):
+            add("sin_whatsapp")
+        if a.get("tiempo_carga_s", 0) > 4:
+            add("web_lenta")
+        if not a.get("movil_optimizada"):
+            add("sin_movil")
+        if not a.get("https") or not a.get("tiene_titulo_seo") or not a.get("tiene_meta_descripcion"):
+            add("sin_https_seo")
+
+    # Si la web está tan bien que no detectó nada, ofrecer mejora de conversión
+    if not items:
+        add("sin_citas_online")
+    return items[:4]
+
+
 NICHO_OFERTA = {
     "restaurantes": ["Nora contesta el teléfono 24/7 y toma pedidos y reservas",
                      "Qena: carta QR y pedidos propios sin comisiones de plataformas"],
@@ -149,11 +218,15 @@ CHECKS_INFORME = [
 ]
 
 
+
+
 @app.get("/informe/{token}", response_class=HTMLResponse)
 def informe(token: str):
-    """Informe de análisis digital personalizado (público, enlazado desde el
-    email). Marca el lead como interesado (lead caliente) al abrirse."""
+    """Informe de análisis digital personalizado (público). Marca el lead como
+    caliente al abrirse. Incluye puntos de dolor reales, solución por cada uno,
+    presupuesto estimado con 40% de descuento y botón de descarga PDF."""
     from db import cargar_json
+    from urllib.parse import quote
     with conexion() as con:
         fila = con.execute(
             "SELECT * FROM leads WHERE token_baja = ?", (token,)).fetchone()
@@ -164,9 +237,35 @@ def informe(token: str):
         actualizar_lead(lead["id"], visito_informe=ahora())
 
     auditoria = cargar_json(lead.get("auditoria")) or {}
-    dolores = cargar_json(lead.get("pain_points")) or []
-    nicho = lead.get("nicho") or "restaurantes"
-    oferta = NICHO_OFERTA.get(nicho, OFERTA_DEFECTO)
+    items = _dolores_del_lead(auditoria, lead)
+    nombre = lead["nombre"]
+    municipio = lead.get("municipio") or ""
+
+    base_total = sum(it["precio"] for it in items) or 690
+    con_dto = round(base_total * 0.60)
+    est_min = int(round(con_dto * 0.85 / 10) * 10)
+    est_max = int(round(con_dto * 1.15 / 10) * 10)
+
+    bloques = ""
+    for i, it in enumerate(items, 1):
+        precio_dto = round(it["precio"] * 0.60)
+        bloques += (
+            '<div style="background:#faf7ef;border-radius:12px;padding:18px 20px;'
+            'margin-bottom:14px;border-left:4px solid #D4AF37;">'
+            '<div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:1px;'
+            'color:#c0392b;font-weight:bold;">&#9888; PROBLEMA ' + str(i) + '</div>'
+            '<p style="color:#1a2332;font-size:15px;line-height:1.5;margin:6px 0 12px 0;'
+            'font-weight:bold;">' + it['dolor'] + '</p>'
+            '<div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:1px;'
+            'color:#3fae6a;font-weight:bold;">&#10003; C&Oacute;MO LO RESOLVEMOS</div>'
+            '<p style="color:#4a5261;font-size:14.5px;line-height:1.55;margin:6px 0 0 0;">'
+            + it['solucion'] + '</p>'
+            '<div style="margin-top:12px;padding-top:12px;border-top:1px dashed #e0d9c6;'
+            'font-family:Arial,sans-serif;font-size:13px;color:#8a8577;">'
+            + it['producto'] + ' &middot; <span style="text-decoration:line-through;">'
+            + str(it['precio']) + '&euro;</span> <span style="color:#0A1628;'
+            'font-weight:bold;">desde ' + str(precio_dto) + '&euro;</span> '
+            '<span style="color:#b8912e;">(-40%)</span></div></div>')
 
     filas_check = ""
     for clave, etiqueta in CHECKS_INFORME:
@@ -175,56 +274,92 @@ def informe(token: str):
         ok = bool(auditoria.get(clave))
         icono = "&#10003;" if ok else "&#10007;"
         color = "#3fae6a" if ok else "#c0392b"
-        filas_check += (f'<tr><td style="padding:9px 12px;color:{color};'
-                        f'font-weight:bold;width:26px;">{icono}</td>'
-                        f'<td style="padding:9px 0;color:#1a2332;">{etiqueta}</td></tr>')
+        filas_check += ('<tr><td style="padding:8px 12px;color:' + color +
+                        ';font-weight:bold;width:26px;">' + icono + '</td>'
+                        '<td style="padding:8px 0;color:#1a2332;font-size:14.5px;">'
+                        + etiqueta + '</td></tr>')
+    seccion_estado = ('<h2 style="color:#0A1628;font-size:18px;border-bottom:1px solid '
+                      '#e8e2d4;padding-bottom:6px;margin-top:8px;">Estado actual de tu '
+                      'presencia digital</h2><table style="width:100%;border-collapse:'
+                      'collapse;">' + filas_check + '</table>') if filas_check else ""
 
-    lista_dolores = "".join(
-        f'<li style="margin:0 0 10px 0;line-height:1.55;">{d}</li>' for d in dolores)
-    lista_oferta = "".join(
-        f'<li style="margin:0 0 10px 0;line-height:1.55;">{o}</li>' for o in oferta)
-    velocidad = auditoria.get("tiempo_carga_s")
-    dato_velocidad = (f'<p style="color:#4a5261;">Velocidad de carga medida: '
-                      f'<strong>{velocidad}s</strong></p>') if velocidad else ""
+    wa_txt = quote("Hola David, he visto el análisis de " + nombre + " y quiero que hablemos")
+    url_wa = "https://wa.me/34624577459?text=" + wa_txt
+    url_pdf = BASE_URL + "/informe/" + token + "/pdf"
+    url_cal = "https://calendly.com/ktysdavids-info-bjqc/30min"
 
-    return f"""<!doctype html>
+    return """<!doctype html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Análisis digital · {lead['nombre']}</title></head>
+<title>An&aacute;lisis digital &middot; """ + nombre + """</title></head>
 <body style="margin:0;background:#f4eede;font-family:Georgia,'Times New Roman',serif;">
-<div style="max-width:640px;margin:0 auto;padding:26px 14px;">
-  <div style="background:#ffffff;border-radius:14px;overflow:hidden;">
-    <div style="background:#0A1628;padding:26px 32px;">
-      <img src="https://cdn.prod.website-files.com/68b944d4a42f90c19d14a5da/6928305ea0e60a4050067585_Logo-normal.webp" alt="Ktys &amp; Davids" width="150" style="display:block;">
+<div style="max-width:660px;margin:0 auto;padding:22px 14px;">
+  <div style="background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 24px rgba(10,22,40,.08);">
+    <div style="background:#0A1628;padding:24px 32px;text-align:center;">
+      <img src="https://cdn.prod.website-files.com/68b944d4a42f90c19d14a5da/6928305ea0e60a4050067585_Logo-normal.webp" alt="Ktys &amp; Davids" width="150" style="display:block;margin:0 auto;">
     </div>
     <div style="height:4px;background:#D4AF37;"></div>
-    <div style="padding:28px 32px;">
-      <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#b8912e;font-weight:bold;">ANÁLISIS DIGITAL GRATUITO</div>
-      <h1 style="color:#0A1628;font-size:26px;margin:6px 0 4px 0;">{lead['nombre']}</h1>
-      <p style="color:#8a8577;font-family:Arial,sans-serif;font-size:13px;margin:0 0 18px 0;">{lead.get('municipio') or ''} · Informe preliminar elaborado por Ktys &amp; Davids</p>
+    <div style="padding:28px 30px;">
+      <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#b8912e;font-weight:bold;">AN&Aacute;LISIS DIGITAL GRATUITO</div>
+      <h1 style="color:#0A1628;font-size:27px;margin:6px 0 2px 0;">""" + nombre + """</h1>
+      <p style="color:#8a8577;font-family:Arial,sans-serif;font-size:13px;margin:0 0 22px 0;">""" + municipio + """ &middot; Informe preliminar &middot; Ktys &amp; Davids</p>
 
-      <h2 style="color:#0A1628;font-size:18px;border-bottom:1px solid #e8e2d4;padding-bottom:6px;">Estado de tu presencia digital</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:15px;">{filas_check}</table>
-      {dato_velocidad}
+      """ + seccion_estado + """
 
-      <h2 style="color:#0A1628;font-size:18px;border-bottom:1px solid #e8e2d4;padding-bottom:6px;margin-top:26px;">Dónde estás perdiendo tiempo y dinero</h2>
-      <ul style="color:#1a2332;font-size:15px;padding-left:20px;">{lista_dolores}</ul>
+      <h2 style="color:#0A1628;font-size:19px;border-bottom:1px solid #e8e2d4;padding-bottom:6px;margin-top:28px;">Lo que hemos encontrado (y c&oacute;mo lo arreglamos)</h2>
+      <p style="color:#8a8577;font-size:14px;margin:8px 0 18px 0;">Estos """ + str(len(items)) + """ puntos son los que ahora mismo te est&aacute;n costando clientes:</p>
+      """ + bloques + """
 
-      <div style="background:#0A1628;border-radius:12px;padding:22px 24px;margin-top:24px;">
-        <div style="color:#D4AF37;font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;font-weight:bold;">CÓMO LO RESOLVEMOS</div>
-        <ul style="color:#ffffff;font-size:15px;padding-left:20px;margin:10px 0 0 0;">{lista_oferta}</ul>
-        <p style="color:#c9cdd6;font-size:13.5px;margin:14px 0 0 0;">Instalado y funcionando en 72 horas. Trato directo con David, el fundador — sin comerciales.</p>
+      <div style="background:#0A1628;border-radius:14px;padding:26px 28px;margin-top:26px;text-align:center;">
+        <div style="color:#D4AF37;font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;font-weight:bold;">PRESUPUESTO ESTIMADO &middot; DESCUENTO 40% APLICADO</div>
+        <div style="color:#ffffff;font-size:15px;margin:12px 0 4px 0;">Soluci&oacute;n completa para """ + nombre + """, estimado:</div>
+        <div style="color:#D4AF37;font-family:Georgia,serif;font-size:38px;font-weight:bold;line-height:1.1;">""" + str(est_min) + """&euro; &ndash; """ + str(est_max) + """&euro;</div>
+        <div style="color:#8a95a8;font-family:Arial,sans-serif;font-size:12px;margin:6px 0 0 0;text-decoration:line-through;">precio de mercado: """ + str(base_total) + """&euro;</div>
+        <p style="color:#c9cdd6;font-size:13.5px;line-height:1.6;margin:16px 0 0 0;">Es una estimaci&oacute;n orientativa. El precio final lo cerramos juntos seg&uacute;n lo que de verdad necesites &mdash; sin pagar de m&aacute;s por cosas que no usas.</p>
       </div>
 
-      <div style="text-align:center;margin-top:26px;">
-        <a href="https://wa.me/34624577459?text=Hola%20David%2C%20he%20visto%20el%20an%C3%A1lisis%20de%20{lead['nombre'].replace(' ', '%20')}%20y%20quiero%20hablar" style="display:inline-block;background:#D4AF37;color:#0A1628;font-family:Arial,sans-serif;font-weight:bold;font-size:16px;padding:14px 28px;border-radius:10px;text-decoration:none;">Hablar con David por WhatsApp</a>
-        <p style="font-family:Arial,sans-serif;font-size:13px;color:#8a8577;margin-top:12px;">O agenda una llamada de 10 minutos: <a href="https://calendly.com/ktysdavids-info-bjqc/30min" style="color:#b8912e;">calendly.com/ktysdavids</a></p>
+      <div style="background:#faf7ef;border-radius:12px;padding:20px 22px;margin-top:16px;">
+        <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:1px;color:#b8912e;font-weight:bold;">&iquest;POR QU&Eacute; PUEDO OFRECERTE ESTOS PRECIOS?</div>
+        <p style="color:#4a5261;font-size:14.5px;line-height:1.6;margin:8px 0 0 0;">Trabajo desde mi ordenador, sin oficina, sin empleados y sin infraestructura que pagar. Eso significa que <strong>mis precios son siempre de los m&aacute;s econ&oacute;micos del mercado</strong> &mdash; te llega el ahorro directo a ti, con trato personal conmigo, el fundador.</p>
+      </div>
+
+      <div style="background:#f0ede3;border-radius:10px;padding:14px 18px;margin-top:16px;text-align:center;">
+        <span style="font-family:Arial,sans-serif;font-size:13.5px;color:#0A1628;">&#9889; Instalado y funcionando en <strong>72 horas</strong> &middot; Trato directo con David, sin comerciales</span>
+      </div>
+
+      <div style="text-align:center;margin-top:28px;">
+        <a href=\"""" + url_wa + """\" style="display:inline-block;background:#D4AF37;color:#0A1628;font-family:Arial,sans-serif;font-weight:bold;font-size:17px;padding:16px 32px;border-radius:10px;text-decoration:none;">Quiero hablar con David &#128172;</a>
+        <div style="margin-top:14px;">
+          <a href=\"""" + url_cal + """\" style="font-family:Arial,sans-serif;font-size:14px;color:#b8912e;text-decoration:none;">&#128197; O agenda una llamada de 10 min aqu&iacute;</a>
+        </div>
+        <div style="margin-top:18px;">
+          <a href=\"""" + url_pdf + """\" target="_blank" style="font-family:Arial,sans-serif;font-size:13px;color:#8a8577;text-decoration:none;border:1px solid #d8d1c0;border-radius:8px;padding:9px 18px;display:inline-block;">&#128424; Imprimir o guardar como PDF</a>
+        </div>
       </div>
     </div>
   </div>
-  <p style="text-align:center;font-family:Arial,sans-serif;font-size:11px;color:#8a8577;margin-top:16px;">Ktys &amp; Davids Productions S.L. · ktysdavids.com</p>
+  <p style="text-align:center;font-family:Arial,sans-serif;font-size:11px;color:#8a8577;margin-top:16px;">Ktys &amp; Davids Productions S.L. &middot; ktysdavids.com<br>Multiplicamos decisiones, no riesgos.</p>
 </div>
 </body></html>"""
+
+
+@app.get("/informe/{token}/pdf", response_class=HTMLResponse)
+def informe_pdf(token: str):
+    """Versión imprimible del informe: abre el diálogo de impresión del
+    navegador para que el usuario lo guarde como PDF. Funciona en cualquier
+    dispositivo sin depender de librerías del servidor."""
+    with conexion() as con:
+        fila = con.execute("SELECT token_baja FROM leads WHERE token_baja=?",
+                           (token,)).fetchone()
+    if not fila:
+        raise HTTPException(404, "Informe no encontrado")
+    # Reutiliza el HTML del informe y le añade el auto-print
+    resp = informe(token)
+    html = resp.body.decode("utf-8") if hasattr(resp, "body") else str(resp)
+    script_print = ("<script>window.onload=function(){"
+                    "setTimeout(function(){window.print();},500);};</script>")
+    html = html.replace("</body>", script_print + "</body>")
+    return HTMLResponse(content=html)
 
 
 # GIF transparente de 1x1 (tracking de aperturas de email)
@@ -408,6 +543,36 @@ def api_exportar_csv(solo_contacto: int = 1,
 
 RESULTADOS_LLAMADA = {"", "contactado", "no_contesta", "volver_llamar",
                       "no_interesado", "cita_agendada", "buzon"}
+
+
+@app.post("/api/lead/{lead_id}/auditar")
+def api_auditar_lead(lead_id: int, x_api_key: str | None = Header(default=None)):
+    """Genera la auditoría y los puntos de dolor de un lead concreto.
+    Si tiene web, la analiza; si no, genera dolores genéricos del nicho.
+    Útil para leads añadidos a mano que no pasaron por el pipeline."""
+    verificar(x_api_key)
+    import importlib
+    aud = importlib.import_module("3_auditar_digital")
+    with conexion() as con:
+        fila = con.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+    if not fila:
+        raise HTTPException(404, "Lead no encontrado")
+    lead = dict(fila)
+    web = (lead.get("web") or "").strip()
+    if web:
+        a = aud.auditar_web(web)
+    else:
+        # Sin web: auditoría mínima que dispara los dolores genéricos del nicho
+        a = {"web_activa": False, "sin_web": True}
+    dolores = aud.detectar_pain_points(lead, a)
+    import json as _json
+    actualizar_lead(lead_id,
+                    auditoria=_json.dumps(a, ensure_ascii=False),
+                    pain_points=_json.dumps(dolores, ensure_ascii=False),
+                    estado="auditado" if lead.get("email") else lead.get("estado"))
+    return {"ok": True, "id": lead_id, "pain_points": len(dolores),
+            "tiene_web": bool(web),
+            "mensaje": f"Auditoría lista: {len(dolores)} puntos de dolor detectados"}
 
 
 @app.post("/api/lead/{lead_id}/gestion")
@@ -774,6 +939,7 @@ a{color:var(--gold2)}
       <input id="n_email" placeholder="Email" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
       <input id="n_tel" placeholder="Teléfono" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
       <input id="n_municipio" placeholder="Municipio" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <input id="n_web" placeholder="Web (para analizar y detectar puntos de dolor)" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
       <select id="n_nicho" style="width:100%;margin-bottom:14px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px"></select>
       <div style="display:flex;gap:10px;justify-content:flex-end">
         <button type="button" class="acc" onclick="cerrarNuevo()">Cancelar</button>
@@ -946,6 +1112,7 @@ function pintar(){
       <td class="hidem">${chips(l)}</td>
       <td>
         ${tieneEmail(l) && l.estado!=='excluido' ? `<button class="acc" style="border-color:#3a5a3a;color:#7bd99a" title="Enviar email ahora" onclick="enviarEmail(${l.id})">✉ Enviar</button>` : ''}
+        <button class="acc" style="border-color:#5a4a2a;color:#e0c085" title="Analizar web y detectar puntos de dolor (para su informe)" onclick="auditarLead(${l.id})">🔍 Auditar</button>
         ${l.whatsapp_url?`<a class="acc wa" href="${l.whatsapp_url}" target="_blank" title="WhatsApp con mensaje e informe listo">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
         ${tieneTel(l)?`<button class="acc" style="border-color:#3a4a5a;color:#7cc4ef" title="Gestión de llamada" onclick="gestionLead(${l.id})">📋 Gestión</button>`:''}
@@ -966,6 +1133,16 @@ async function descargarCSV(){
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }catch(e){ alert('Error al descargar el CSV'); }
+}
+async function auditarLead(id){
+  const l=LEADS.find(x=>x.id===id);
+  const conWeb=l&&l.web;
+  if(!confirm(conWeb?'¿Analizar la web de "'+l.nombre+'" y generar su informe con puntos de dolor?':'Este lead no tiene web. ¿Generar un informe con los puntos de dolor típicos de su sector? (Puedes añadir su web con el botón ✎ para un análisis más preciso)')) return;
+  try{
+    const r=await api('/api/lead/'+id+'/auditar',{method:'POST'});
+    alert('✅ '+r.mensaje);
+    await cargar();
+  }catch(e){ alert('⚠️ '+(e.message||'Error al auditar')); }
 }
 let gestionId=null;
 function gestionLead(id){
@@ -1069,6 +1246,7 @@ async function guardarNuevo(){
     email:document.getElementById('n_email').value,
     telefono:document.getElementById('n_tel').value,
     municipio:document.getElementById('n_municipio').value,
+    web:document.getElementById('n_web').value,
     nicho:document.getElementById('n_nicho').value,
   };
   try{
