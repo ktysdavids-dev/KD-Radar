@@ -476,6 +476,7 @@ def api_leads(x_api_key: str | None = Header(default=None)):
                       web, rating, num_resenas, estado, email_abierto,
                       visito_informe, llamado, notas, recordatorio,
                       resultado_llamada, token_baja,
+                      consentimiento, consent_fuente, cita_texto,
                       auditoria, pain_points, actualizado_en
                FROM leads ORDER BY
                  CASE WHEN visito_informe IS NOT NULL THEN 0
@@ -545,6 +546,14 @@ def api_toggle_cliente(lead_id: int, x_api_key: str | None = Header(default=None
     else:
         nuevo = "cliente"
     actualizar_lead(lead_id, estado=nuevo)
+    # Cliente = relación contractual: permiso de llamada automático + sync a Sonar
+    if nuevo == "cliente":
+        with conexion() as con:
+            tel = (con.execute("SELECT telefono FROM leads WHERE id=?", (lead_id,))
+                   .fetchone() or {"telefono": None})["telefono"]
+        if tel:
+            _conceder_permiso(lead_id, True, "cliente_actual")
+            _sync_consent_sonar(tel, True, "cliente_actual")
     return {"ok": True, "estado": nuevo, "es_cliente": nuevo == "cliente"}
 
 
@@ -639,6 +648,8 @@ def api_gestion(lead_id: int, datos: dict,
     if "recordatorio" in datos:
         # Espera ISO 'YYYY-MM-DDTHH:MM' o vacío para quitarlo
         campos["recordatorio"] = (datos["recordatorio"] or "").strip() or None
+    if "cita_texto" in datos:
+        campos["cita_texto"] = (datos["cita_texto"] or "").strip() or None
     if "marcar_llamado" in datos:
         campos["llamado"] = ahora() if datos["marcar_llamado"] else None
     if not campos:
@@ -752,7 +763,10 @@ def api_borrar_lead(lead_id: int, x_api_key: str | None = Header(default=None)):
 @app.post("/api/lead/nuevo")
 def api_nuevo_lead(datos: dict, x_api_key: str | None = Header(default=None)):
     """Añade un contacto a mano desde el panel. Requiere nombre y al menos
-    email o teléfono. Si trae email, entra directo al circuito de envío."""
+    email o teléfono. Si trae email, entra directo al circuito de envío.
+    Si marcas 'tengo su permiso', el lead queda llamable por el bot ya
+    (alta manual = contacto directo; el permiso se registra con fecha y
+    origen y se sincroniza con KD Sonar automáticamente)."""
     verificar(x_api_key)
     import secrets as _s
     nombre = (datos.get("nombre") or "").strip()
@@ -762,21 +776,31 @@ def api_nuevo_lead(datos: dict, x_api_key: str | None = Header(default=None)):
         raise HTTPException(400, "Falta el nombre del negocio")
     if not email and not telefono:
         raise HTTPException(400, "Pon al menos email o teléfono")
+    con_permiso = bool(datos.get("consentimiento")) and bool(telefono)
     estado = "auditado" if email else "sin_email"
+    pid = f"manual-{_s.token_urlsafe(8)}"
     with conexion() as con:
         con.execute(
             """INSERT INTO leads (place_id, nombre, municipio, provincia, nicho,
                                   telefono, email, web, estado, token_baja,
+                                  consentimiento, consent_fuente, consent_fecha,
                                   creado_en, actualizado_en)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (f"manual-{_s.token_urlsafe(8)}", nombre,
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (pid, nombre,
              (datos.get("municipio") or "").strip() or None, "Valencia",
              (datos.get("nicho") or "restaurantes").strip(),
              telefono, email, (datos.get("web") or "").strip() or None,
-             estado, _s.token_urlsafe(16), ahora(), ahora()))
+             estado, _s.token_urlsafe(16),
+             1 if con_permiso else 0,
+             "alta_manual" if con_permiso else None,
+             ahora() if con_permiso else None,
+             ahora(), ahora()))
+    sonar = _sync_consent_sonar(telefono, True, "alta_manual") if con_permiso else "no_aplica"
     return {"ok": True, "mensaje": f"'{nombre}' añadido"
+            + (" con permiso de llamada ✓" if con_permiso else "")
             + (" (entrará en la próxima redacción y envío)" if email
-               else " (lista de WhatsApp)")}
+               else " (lista de WhatsApp)"),
+            "sonar": sonar}
 
 
 @app.post("/api/reset")
@@ -938,6 +962,8 @@ a{color:var(--gold2)}
       <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">NOTAS (con quién hablé, qué dijo, qué necesita...)</label>
       <textarea id="g_notas" rows="4" placeholder="Ej: Hablé con Pepe, el dueño. Le interesa Nora pero quiere pensarlo. Volver a llamar el viernes por la mañana." style="width:100%;margin:6px 0 14px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit;resize:vertical"></textarea>
 
+      <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">📅 CITA — día y franja acordados (si hay cita)</label>
+      <input id="g_cita" placeholder="Ej: miércoles por la tarde, sobre las 17:00" style="width:100%;margin:6px 0 14px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit">
       <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">⏰ RECORDATORIO — ¿cuándo vuelvo a llamar?</label>
       <input id="g_recordatorio" type="datetime-local" style="width:100%;margin:6px 0 6px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit">
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
@@ -981,6 +1007,7 @@ a{color:var(--gold2)}
       <input id="n_tel" placeholder="Teléfono" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
       <input id="n_municipio" placeholder="Municipio" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
       <input id="n_web" placeholder="Web (para analizar y detectar puntos de dolor)" style="width:100%;margin-bottom:8px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px">
+      <label style="display:block;background:#0d2b1a;border:1px solid #2a5a3a;border-radius:8px;padding:10px 12px;margin-bottom:8px;font-size:12.5px;color:var(--txt);cursor:pointer;line-height:1.5"><input type="checkbox" id="n_consent" style="vertical-align:-2px"> 📞 <b>Tengo su permiso para que le llame el bot</b> — me lo ha pedido, es contacto directo o cliente. Queda registrado con fecha y origen. (Los leads captados en frío nunca llevan permiso: art. 66 LGT.)</label>
       <select id="n_nicho" style="width:100%;margin-bottom:14px;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:9px 12px"></select>
       <div style="display:flex;gap:10px;justify-content:flex-end">
         <button type="button" class="acc" onclick="cerrarNuevo()">Cancelar</button>
@@ -1013,6 +1040,7 @@ const TABS=[
   ['calientes','🔥 Calientes'],
   ['abiertos','👀 Abrieron'],
   ['respondidos','💬 Respondidos'],
+  ['citas','📅 Citas'],
   ['clientes','⭐ Clientes'],
   ['bajas','🚫 Bajas'],
 ];
@@ -1066,6 +1094,7 @@ function pasaFiltroTab(l,tab){
     case 'calientes': return !!l.visito_informe && l.estado!=='cliente';
     case 'abiertos': return !!l.email_abierto;
     case 'respondidos': return l.estado==='respondido';
+    case 'citas': return l.resultado_llamada==='cita_agendada';
     case 'clientes': return l.estado==='cliente';
     case 'bajas': return l.estado==='excluido';
     default: return true;
@@ -1098,6 +1127,8 @@ function chips(l){
   const resNames={contactado:'✓ Contactado',no_contesta:'No contesta',volver_llamar:'↻ Rellamar',no_interesado:'✗ No interesa',cita_agendada:'📅 Cita agendada',buzon:'Buzón',no_llamar:'🚫 No llamar',enviar_email:'✉ Pidió email',numero_equivocado:'☎ Nº equivocado'};
   if(l.resultado_llamada && resNames[l.resultado_llamada]) h+=`<span class="chip" style="background:#2a2438;color:#c4a8e0">${resNames[l.resultado_llamada]}</span>`;
   if(l.llamado) h+='<span class="chip" style="background:#3d2a1a;color:#e0a585">📞 Llamado</span>';
+  if(l.resultado_llamada==='cita_agendada') h+=`<span class="chip" style="background:#3a2b06;color:var(--gold);border:1px solid var(--gold2)">📅 CITA${l.cita_texto?': '+l.cita_texto:''}</span>`;
+  if(l.consentimiento) h+='<span class="chip" style="background:#0d3320;color:#7bd99a;border:1px solid #2a5a3a">📞✔ Permiso bot</span>';
   if(tieneEmail(l)) h+='<span class="chip c-mail">✉ Email</span>';
   else if(tieneTel(l)) h+='<span class="chip c-tel">📱 Tel</span>';
   return h||'<span class="nodato">—</span>';
@@ -1157,6 +1188,7 @@ function pintar(){
         <button class="acc" style="border-color:#5a4a2a;color:#e0c085" title="Analizar web y detectar puntos de dolor (para su informe)" onclick="auditarLead(${l.id})">🔍 ${l.tiene_informe?'Re-auditar':'Auditar'}</button>
         ${l.whatsapp_url?`<a class="acc wa" href="${l.whatsapp_url}" target="_blank" title="WhatsApp con mensaje e informe listo">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
+        ${tieneTel(l)&&l.estado!=='excluido'?`<button class="acc" style="${l.consentimiento?'border-color:#2a5a3a;color:#7bd99a':'border-color:#5a5230;color:#d8c98a'}" title="${l.consentimiento?'Permiso de llamada registrado ('+(l.consent_fuente||'')+'). Clic para revocar.':'Registrar que ME HA PEDIDO la llamada (respondió LLÁMAME, verbal, WhatsApp...). Queda con fecha y origen.'}" onclick="togglePermiso(${l.id},${l.consentimiento?0:1})">${l.consentimiento?'📞✔':'📞 Permiso'}</button>`:''}
         ${tieneTel(l)&&l.estado!=='excluido'?`<button class="acc" style="border-color:var(--gold2);color:var(--gold)" title="El bot (Alba) le llama AHORA para agendar la visita" onclick="llamarBot(${l.id})">🤖 Bot</button>`:''}
         ${tieneTel(l)?`<button class="acc" style="border-color:#3a4a5a;color:#7cc4ef" title="Gestión de llamada" onclick="gestionLead(${l.id})">📋 Gestión</button>`:''}
         <button class="acc" title="Editar" onclick="editarLead(${l.id})">✎</button>
@@ -1199,12 +1231,21 @@ async function auditarLead(id){
     }
   }catch(e){ alert('⚠️ '+(e.message||'Error al auditar')); }
 }
+async function togglePermiso(id,valor){
+  const l=LEADS.find(x=>x.id===id); if(!l) return;
+  if(valor&&!confirm('📞 ¿Confirmas que "'+l.nombre+'" TE HA PEDIDO la llamada del bot?\\n\\n(Respondió LLÁMAME al email, te lo pidió en persona o por WhatsApp, o es contacto directo.)\\n\\nQuedará registrado con fecha y origen, y sincronizado con el bot.')) return;
+  if(!valor&&!confirm('¿Revocar el permiso de llamada de "'+l.nombre+'"?')) return;
+  try{
+    await api('/api/lead/'+id+'/consentimiento',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({valor:!!valor,fuente:'panel_manual'})});
+    await cargar();
+  }catch(e){ alert('⚠️ '+(e.message||'Error registrando el permiso')); }
+}
 let monitorTimer=null;
 async function llamarBot(id){
   const l=LEADS.find(x=>x.id===id);
   if(!l) return;
-  const esCliente=l.estado==='cliente';
-  if(!confirm('🤖 ¿Lanzar llamada del bot (Alba) a "'+l.nombre+'" AHORA?\\n\\n'+(esCliente?'Es cliente: se llamará directamente.':'Solo se llamará si tiene consentimiento registrado (respondió LLÁMAME). Si no, el bot lo bloqueará.'))) return;
+  const conPermiso=l.estado==='cliente'||l.consentimiento==1;
+  if(!confirm('🤖 ¿Lanzar llamada del bot (Alba) a "'+l.nombre+'" AHORA?\\n\\n'+(conPermiso?'✓ Tiene permiso registrado: se llamará directamente.':'⚠ SIN permiso registrado: el bot la bloqueará. Usa antes el botón 📞 Permiso si te ha pedido la llamada, o márcalo ⭐ cliente.'))) return;
   const box=document.getElementById('monitor');
   box.style.display='block';
   box.innerHTML='🤖 Preparando llamada a <b>'+l.nombre+'</b>…';
@@ -1255,6 +1296,7 @@ function gestionLead(id){
   document.getElementById('g_sub').textContent=(l.telefono||'')+' · '+(l.municipio||'')+' · '+(l.nicho||'');
   document.getElementById('g_resultado').value=l.resultado_llamada||'';
   document.getElementById('g_notas').value=l.notas||'';
+  document.getElementById('g_cita').value=l.cita_texto||'';
   // recordatorio: convertir ISO a formato datetime-local (sin segundos ni Z)
   document.getElementById('g_recordatorio').value=l.recordatorio ? l.recordatorio.slice(0,16) : '';
   document.getElementById('g_err').textContent='';
@@ -1272,6 +1314,7 @@ async function guardarGestion(){
   const datos={
     resultado:document.getElementById('g_resultado').value,
     notas:document.getElementById('g_notas').value,
+    cita_texto:document.getElementById('g_cita').value,
     recordatorio:document.getElementById('g_recordatorio').value,
   };
   try{
@@ -1351,6 +1394,7 @@ async function guardarNuevo(){
     municipio:document.getElementById('n_municipio').value,
     web:document.getElementById('n_web').value,
     nicho:document.getElementById('n_nicho').value,
+    consentimiento:document.getElementById('n_consent').checked?1:0,
   };
   try{
     const r=await fetch('/api/lead/nuevo',{method:'POST',headers:{'X-API-Key':clave(),'Content-Type':'application/json'},body:JSON.stringify(datos)});
@@ -1358,6 +1402,7 @@ async function guardarNuevo(){
     if(!r.ok){ document.getElementById('n_err').textContent=j.detail||'Error'; return; }
     cerrarNuevo();
     ['n_nombre','n_email','n_tel','n_municipio'].forEach(i=>document.getElementById(i).value='');
+    document.getElementById('n_consent').checked=false;
     await cargar();
   }catch(e){ document.getElementById('n_err').textContent='Error de conexión'; }
 }
@@ -1566,6 +1611,8 @@ def api_sonar_resultado(datos: dict,
         "llamado": ahora(),
         "notas": notas_total,
     }
+    if resultado_radar == "cita_agendada" and fecha_cita:
+        campos["cita_texto"] = fecha_cita
     # Si el lead no tenía email y el bot capturó uno, lo guardamos
     if email_dictado and "@" in email_dictado and not (lead.get("email") or "").strip():
         campos["email"] = email_dictado
@@ -1613,8 +1660,10 @@ def api_sonar_lote(limite: int = 100, incluir_clientes: int = 1,
         filas = con.execute(
             f"""SELECT * FROM leads
                 WHERE telefono IS NOT NULL AND telefono != ''
-                  AND estado IN ({marcadores})
-                ORDER BY CASE WHEN estado='cliente' THEN 0 ELSE 1 END,
+                  AND estado != 'excluido'
+                  AND (estado IN ({marcadores}) OR consentimiento = 1)
+                ORDER BY CASE WHEN estado='cliente' THEN 0
+                              WHEN consentimiento=1 THEN 1 ELSE 2 END,
                          num_resenas DESC
                 LIMIT ?""",
             (*estados, limite),
@@ -1623,6 +1672,7 @@ def api_sonar_lote(limite: int = 100, incluir_clientes: int = 1,
     for f in filas:
         lead = dict(f)
         es_cliente = lead.get("estado") == "cliente"
+        con_permiso = es_cliente or lead.get("consentimiento") == 1
         salida.append({
             "id": lead["id"],
             "empresa": lead.get("nombre") or "Negocio",
@@ -1632,8 +1682,10 @@ def api_sonar_lote(limite: int = 100, incluir_clientes: int = 1,
             "sector": lead.get("nicho") or "",
             "municipio": lead.get("municipio") or "",
             "puntos_dolor": _puntos_dolor_texto(lead),
-            "consent": 1 if es_cliente else 0,
-            "consent_source": "cliente_actual" if es_cliente else "",
+            "consent": 1 if con_permiso else 0,
+            "consent_source": ("cliente_actual" if es_cliente
+                               else (lead.get("consent_fuente") or "panel_radar")
+                               if con_permiso else ""),
             "estado_radar": lead.get("estado"),
         })
     return salida
@@ -1679,7 +1731,8 @@ def api_llamar_sonar(lead_id: int, x_api_key: str | None = Header(default=None))
         "sector": lead.get("nicho") or "",
         "puntos_dolor": _puntos_dolor_texto(lead),
         "email": lead.get("email") or "",
-        "consent": 1 if lead.get("estado") == "cliente" else 0,
+        "consent": 1 if (lead.get("estado") == "cliente"
+                         or lead.get("consentimiento") == 1) else 0,
     }
     try:
         r = _httpx.post(f"{SONAR_URL}/calls/lead", json=payload,
@@ -1705,3 +1758,70 @@ def api_estado_llamada(call_id: str, x_api_key: str | None = Header(default=None
     if r.status_code >= 400:
         raise HTTPException(502, f"KD Sonar {r.status_code}: {r.text[:200]}")
     return r.json()
+
+
+# ---------------------------------------------------------------------
+# Registro de PERMISO de llamada (consentimiento) en el propio CRM
+# ---------------------------------------------------------------------
+# El permiso se registra con fecha y origen (registro maestro para la AEPD)
+# y se sincroniza automáticamente con KD Sonar. Vías legítimas: cliente,
+# alta manual con permiso, LLÁMAME, o petición verbal/WhatsApp registrada
+# con el botón del panel. Los leads captados en frío NUNCA llevan permiso.
+
+def _migrar_consentimiento():
+    with conexion() as con:
+        cols = {f["name"] for f in con.execute("PRAGMA table_info(leads)")}
+        if "consentimiento" not in cols:
+            con.execute("ALTER TABLE leads ADD COLUMN consentimiento INTEGER DEFAULT 0")
+        if "consent_fuente" not in cols:
+            con.execute("ALTER TABLE leads ADD COLUMN consent_fuente TEXT")
+        if "consent_fecha" not in cols:
+            con.execute("ALTER TABLE leads ADD COLUMN consent_fecha TEXT")
+        if "cita_texto" not in cols:
+            con.execute("ALTER TABLE leads ADD COLUMN cita_texto TEXT")
+
+
+_migrar_consentimiento()
+
+
+def _sync_consent_sonar(telefono: str, valor: bool, fuente: str) -> str:
+    """Empuja el permiso a KD Sonar. Best-effort: si falla, el registro
+    maestro queda en Radar y el lote/llamada lo re-sincroniza después."""
+    if not _sonar_configurado():
+        return "sonar_no_configurado"
+    try:
+        r = _httpx.post(f"{SONAR_URL}/consents/by-phone",
+                        json={"telefono": telefono, "consent": bool(valor),
+                              "source": fuente},
+                        headers={"X-API-Key": SONAR_API_KEY}, timeout=15)
+        return "sincronizado" if r.status_code < 400 else f"error_{r.status_code}"
+    except _httpx.HTTPError as e:
+        return f"error: {type(e).__name__}"
+
+
+def _conceder_permiso(lead_id: int, valor: bool, fuente: str) -> None:
+    campos = {"consentimiento": 1 if valor else 0,
+              "consent_fuente": fuente if valor else None,
+              "consent_fecha": ahora() if valor else None}
+    actualizar_lead(lead_id, **campos)
+
+
+@app.post("/api/lead/{lead_id}/consentimiento")
+def api_consentimiento(lead_id: int, datos: dict,
+                       x_api_key: str | None = Header(default=None)):
+    """Registra (o revoca) el permiso de llamada de un lead y lo sincroniza
+    con KD Sonar. El permiso queda con fecha y origen: registro maestro."""
+    verificar(x_api_key)
+    with conexion() as con:
+        f = con.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+    if not f:
+        raise HTTPException(404, "Lead no encontrado")
+    lead = dict(f)
+    if not (lead.get("telefono") or "").strip():
+        raise HTTPException(400, "Este lead no tiene teléfono: el permiso de llamada no aplica")
+    valor = bool(datos.get("valor"))
+    fuente = (datos.get("fuente") or "panel_manual").strip()
+    _conceder_permiso(lead_id, valor, fuente)
+    sonar = _sync_consent_sonar(lead["telefono"], valor, fuente)
+    return {"ok": True, "lead_id": lead_id, "consentimiento": valor,
+            "fuente": fuente, "sonar": sonar}
