@@ -1342,3 +1342,248 @@ def baja(token: str):
      comunicaciones comerciales de Ktys &amp; Davids.</p>
   <p>Gracias por tu tiempo.</p>
 </div></body></html>"""
+
+
+# =====================================================================
+# INTEGRACIÓN KD SONAR (bot de llamadas salientes) — v1
+# ---------------------------------------------------------------------
+# KD Sonar llama a los leads y, al terminar cada llamada, empuja aquí el
+# resultado (POST /api/sonar/resultado). KD Radar queda como CRM único:
+# resultado, cita, notas y opt-outs se ven en el panel de siempre.
+# Además expone GET /api/sonar/lote para que Sonar importe leads sin CSV.
+# Si la llamada acaba en cita, se envía automáticamente el email de
+# confirmación por SMTP (IONOS), registrado en la tabla de envíos.
+# =====================================================================
+import json as _json
+
+# Resultados extra que introduce el bot (se suman a los del panel manual)
+RESULTADOS_LLAMADA.update({"no_llamar", "enviar_email", "numero_equivocado"})
+
+_MAPA_RESULTADO_SONAR = {
+    "cita_agendada": "cita_agendada",
+    "volver_a_llamar": "volver_llamar",
+    "enviar_email": "enviar_email",
+    "no_interesado": "no_interesado",
+    "numero_equivocado": "numero_equivocado",
+    "no_llamar": "no_llamar",
+}
+
+
+def _solo_digitos(texto: str | None) -> str:
+    return "".join(c for c in (texto or "") if c.isdigit())
+
+
+def _lead_por_telefono(telefono: str | None) -> dict | None:
+    """Busca el lead comparando los últimos 9 dígitos (formato ES),
+    tolerante a prefijos +34/0034, espacios y guiones."""
+    cola = _solo_digitos(telefono)[-9:]
+    if len(cola) < 9:
+        return None
+    with conexion() as con:
+        filas = con.execute(
+            "SELECT * FROM leads WHERE telefono IS NOT NULL AND telefono != ''"
+        ).fetchall()
+    for f in filas:
+        if _solo_digitos(f["telefono"])[-9:] == cola:
+            return dict(f)
+    return None
+
+
+def _puntos_dolor_texto(lead: dict, maximo: int = 3, tope_chars: int = 420) -> str:
+    """Convierte el JSON de pain_points en una frase corta para el bot."""
+    try:
+        dolores = _json.loads(lead.get("pain_points") or "[]")
+    except (ValueError, TypeError):
+        dolores = []
+    frases = [d for d in dolores if isinstance(d, str) and d.strip()][:maximo]
+    texto = "; ".join(frases)
+    if not texto:
+        texto = "varios puntos de mejora detectados en su presencia digital"
+    return texto[:tope_chars]
+
+
+def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
+                              email_destino: str) -> str:
+    """Envía el email de confirmación de la visita. Devuelve 'enviado' o el error."""
+    if not SMTP_PASS:
+        return "sin_smtp_configurado"
+    if not email_destino:
+        return "sin_email"
+    nombre = lead.get("nombre") or "su negocio"
+    fecha = (fecha_texto or "").strip() or "en la fecha acordada por teléfono"
+    baja = (f'{BASE_URL}/baja/{lead["token_baja"]}'
+            if lead.get("token_baja") else "")
+    texto = (
+        f"Hola,\n\nLe confirmamos la visita de David Amundarain "
+        f"({REMITENTE_NOMBRE}) a {nombre}: {fecha}.\n\n"
+        "Es una visita informativa breve (20-30 minutos), sin coste y sin "
+        "compromiso, para enseñarle lo detectado en la revisión digital de su "
+        "negocio.\n\nSi necesita cambiar el día o la hora, responda a este "
+        f"correo.\n\nUn saludo,\n{REMITENTE_NOMBRE}\n{REMITENTE_EMAIL}"
+    )
+    html = f"""\
+<div style="background:#f4eede;padding:32px 16px;font-family:Georgia,'Times New Roman',serif;color:#0c0905">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e6ddc9;border-radius:10px;overflow:hidden">
+    <div style="background:#0c0905;padding:20px 28px">
+      <span style="color:#cda450;font-size:20px;letter-spacing:.5px">Ktys &amp; Davids</span>
+    </div>
+    <div style="padding:28px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6">
+      <p style="margin:0 0 14px">Hola,</p>
+      <p style="margin:0 0 14px">Le confirmamos la visita de <strong>David Amundarain</strong>
+      ({REMITENTE_NOMBRE}) a <strong>{nombre}</strong>:</p>
+      <p style="margin:0 0 18px;background:#f4eede;border-left:4px solid #cda450;padding:12px 16px;font-size:16px">
+        <strong>{fecha}</strong></p>
+      <p style="margin:0 0 14px">Es una visita informativa breve (20&ndash;30 minutos),
+      sin coste y sin compromiso, para ense&ntilde;arle lo detectado en la
+      revisi&oacute;n digital de su negocio.</p>
+      <p style="margin:0 0 14px">Si necesita cambiar el d&iacute;a o la hora,
+      responda a este correo.</p>
+      <p style="margin:22px 0 0">Un saludo,<br><strong>{REMITENTE_NOMBRE}</strong><br>
+      <a href="mailto:{REMITENTE_EMAIL}" style="color:#0c0905">{REMITENTE_EMAIL}</a></p>
+    </div>
+    <div style="padding:14px 28px;background:#faf6ec;border-top:1px solid #e6ddc9;
+                font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#8a8272">
+      Ktys &amp; Davids Productions S.L.
+      {('&middot; <a href="' + baja + '" style="color:#8a8272">No deseo recibir m&aacute;s correos</a>') if baja else ''}
+    </div>
+  </div>
+</div>"""
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = f"Confirmación de su visita — {REMITENTE_NOMBRE}"
+        msg["From"] = f"{REMITENTE_NOMBRE} <{REMITENTE_EMAIL}>"
+        msg["To"] = email_destino
+        msg["Reply-To"] = REMITENTE_EMAIL
+        msg.attach(MIMEText(texto, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+    except Exception as e:  # noqa: BLE001
+        return f"error: {type(e).__name__}: {e}"
+    with conexion() as con:
+        con.execute(
+            "INSERT INTO envios (lead_id, asunto, campana, fecha) VALUES (?,?,?,?)",
+            (lead["id"], "Confirmación de visita", "confirmacion-cita", ahora()),
+        )
+    return "enviado"
+
+
+@app.post("/api/sonar/resultado")
+def api_sonar_resultado(datos: dict,
+                        x_api_key: str | None = Header(default=None)):
+    """Recibe de KD Sonar el resultado de una llamada y actualiza el CRM.
+
+    Body: { telefono, resultado, fecha_cita_texto, email_confirmado,
+            notas, solicita_no_llamar, call_id }
+    """
+    verificar(x_api_key)
+    telefono = (datos.get("telefono") or "").strip()
+    if not telefono:
+        raise HTTPException(400, "Falta 'telefono'")
+
+    lead = _lead_por_telefono(telefono)
+    if not lead:
+        return {"ok": False, "motivo": "lead_no_encontrado", "telefono": telefono}
+
+    resultado_sonar = (datos.get("resultado") or "").strip().lower()
+    solicita_no_llamar = bool(datos.get("solicita_no_llamar"))
+    if solicita_no_llamar:
+        resultado_sonar = "no_llamar"
+    resultado_radar = _MAPA_RESULTADO_SONAR.get(resultado_sonar, "contactado")
+
+    fecha_cita = (datos.get("fecha_cita_texto") or "").strip()
+    email_dictado = (datos.get("email_confirmado") or "").strip().lower()
+    notas_sonar = (datos.get("notas") or "").strip()
+    call_id = (datos.get("call_id") or "").strip()
+
+    # Nota de historial (se acumula sobre las notas existentes del panel)
+    partes = [f"[Sonar {ahora()[:16]}] {resultado_radar}"]
+    if fecha_cita:
+        partes.append(f"Cita: {fecha_cita}")
+    if email_dictado:
+        partes.append(f"Email en llamada: {email_dictado}")
+    if notas_sonar:
+        partes.append(notas_sonar)
+    if call_id:
+        partes.append(f"call {call_id}")
+    nota_nueva = " · ".join(partes)
+    notas_total = f"{(lead.get('notas') or '').strip()}\n{nota_nueva}".strip()[:4000]
+
+    campos: dict = {
+        "resultado_llamada": resultado_radar,
+        "llamado": ahora(),
+        "notas": notas_total,
+    }
+    # Si el lead no tenía email y el bot capturó uno, lo guardamos
+    if email_dictado and "@" in email_dictado and not (lead.get("email") or "").strip():
+        campos["email"] = email_dictado
+
+    email_confirmacion = "no_aplica"
+    if resultado_radar == "no_llamar":
+        campos["estado"] = "excluido"
+        if (lead.get("email") or "").strip():
+            excluir_email(lead["email"], motivo="no_llamar_telefono")
+    elif resultado_radar == "cita_agendada":
+        destino = (campos.get("email") or lead.get("email") or "").strip()
+        email_confirmacion = _enviar_confirmacion_cita(lead, fecha_cita, destino)
+
+    actualizar_lead(lead["id"], **campos)
+    return {
+        "ok": True,
+        "lead_id": lead["id"],
+        "resultado": resultado_radar,
+        "email_confirmacion": email_confirmacion,
+    }
+
+
+@app.get("/api/sonar/lote")
+def api_sonar_lote(limite: int = 100, incluir_clientes: int = 1,
+                   solo_enviados: int = 1,
+                   x_api_key: str | None = Header(default=None)):
+    """Leads con teléfono listos para importar en KD Sonar (sin CSV).
+
+    Por defecto: leads en estado 'enviado' (ya recibieron el email frío) y
+    'cliente' (relación actual). Los clientes van con consent=1; el resto con
+    consent=0 — el consentimiento real lo registra Sonar cuando responden
+    LLÁMAME. Los excluidos nunca salen.
+    """
+    verificar(x_api_key)
+    limite = max(1, min(limite, 500))
+    estados = []
+    if solo_enviados:
+        estados.append("enviado")
+    else:
+        estados += ["enviado", "auditado", "redactado", "con_email", "sin_email"]
+    if incluir_clientes:
+        estados.append("cliente")
+    marcadores = ",".join("?" for _ in estados)
+    with conexion() as con:
+        filas = con.execute(
+            f"""SELECT * FROM leads
+                WHERE telefono IS NOT NULL AND telefono != ''
+                  AND estado IN ({marcadores})
+                ORDER BY CASE WHEN estado='cliente' THEN 0 ELSE 1 END,
+                         num_resenas DESC
+                LIMIT ?""",
+            (*estados, limite),
+        ).fetchall()
+    salida = []
+    for f in filas:
+        lead = dict(f)
+        es_cliente = lead.get("estado") == "cliente"
+        salida.append({
+            "id": lead["id"],
+            "empresa": lead.get("nombre") or "Negocio",
+            "contacto": "",
+            "telefono": lead.get("telefono") or "",
+            "email": lead.get("email") or "",
+            "sector": lead.get("nicho") or "",
+            "municipio": lead.get("municipio") or "",
+            "puntos_dolor": _puntos_dolor_texto(lead),
+            "consent": 1 if es_cliente else 0,
+            "consent_source": "cliente_actual" if es_cliente else "",
+            "estado_radar": lead.get("estado"),
+        })
+    return salida
