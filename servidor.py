@@ -901,6 +901,7 @@ a{color:var(--gold2)}
 <div class="wrap hide" id="app">
   <div class="stats" id="stats"></div>
   <div id="avisoRec" style="display:none;background:#3a2b06;border:1px solid var(--gold2);color:var(--gold);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px"></div>
+  <div id="monitor" style="display:none;background:#0d2038;border:1px solid #2a4a6a;color:#cfe4f7;border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:14px"></div>
   <div class="bar">
     <input type="search" id="buscar" placeholder="Buscar negocio, municipio, email o teléfono..." oninput="pintar()">
     <select id="fnicho" onchange="pintar()"><option value="">Todos los nichos</option></select>
@@ -1094,7 +1095,7 @@ function chips(l){
     const fecha = new Date(l.recordatorio).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});
     h+=`<span class="chip" style="background:${venc?'#4a1a1a':'#1a3a4a'};color:${venc?'#ff9a9a':'#7cc4ef'};border:1px solid ${venc?'#e08585':'#3a5a6a'}">⏰ ${venc?'¡AHORA! ':''}${fecha}</span>`;
   }
-  const resNames={contactado:'✓ Contactado',no_contesta:'No contesta',volver_llamar:'↻ Rellamar',no_interesado:'✗ No interesa',cita_agendada:'📅 Cita agendada',buzon:'Buzón'};
+  const resNames={contactado:'✓ Contactado',no_contesta:'No contesta',volver_llamar:'↻ Rellamar',no_interesado:'✗ No interesa',cita_agendada:'📅 Cita agendada',buzon:'Buzón',no_llamar:'🚫 No llamar',enviar_email:'✉ Pidió email',numero_equivocado:'☎ Nº equivocado'};
   if(l.resultado_llamada && resNames[l.resultado_llamada]) h+=`<span class="chip" style="background:#2a2438;color:#c4a8e0">${resNames[l.resultado_llamada]}</span>`;
   if(l.llamado) h+='<span class="chip" style="background:#3d2a1a;color:#e0a585">📞 Llamado</span>';
   if(tieneEmail(l)) h+='<span class="chip c-mail">✉ Email</span>';
@@ -1156,6 +1157,7 @@ function pintar(){
         <button class="acc" style="border-color:#5a4a2a;color:#e0c085" title="Analizar web y detectar puntos de dolor (para su informe)" onclick="auditarLead(${l.id})">🔍 ${l.tiene_informe?'Re-auditar':'Auditar'}</button>
         ${l.whatsapp_url?`<a class="acc wa" href="${l.whatsapp_url}" target="_blank" title="WhatsApp con mensaje e informe listo">WhatsApp</a>`:''}
         ${tieneTel(l)?`<button class="acc" style="${l.llamado?'border-color:#5a3a3a;color:#e08585':'border-color:#3a4a5a;color:#7cc4ef'}" title="${l.llamado?'Llamado ✓':'Marcar llamado'}" onclick="marcarLlamado(${l.id},${l.llamado?0:1})">${l.llamado?'📞 Llamado':'📞 Llamar'}</button>`:''}
+        ${tieneTel(l)&&l.estado!=='excluido'?`<button class="acc" style="border-color:var(--gold2);color:var(--gold)" title="El bot (Alba) le llama AHORA para agendar la visita" onclick="llamarBot(${l.id})">🤖 Bot</button>`:''}
         ${tieneTel(l)?`<button class="acc" style="border-color:#3a4a5a;color:#7cc4ef" title="Gestión de llamada" onclick="gestionLead(${l.id})">📋 Gestión</button>`:''}
         <button class="acc" title="Editar" onclick="editarLead(${l.id})">✎</button>
         <button class="acc" style="${l.estado==='cliente'?'border-color:var(--gold);color:var(--gold);background:#3a2b06':''}" title="${l.estado==='cliente'?'Es cliente (clic para quitar)':'Marcar cliente'}" onclick="toggleCliente(${l.id})">${l.estado==='cliente'?'⭐ Cliente':'☆'}</button>
@@ -1196,6 +1198,54 @@ async function auditarLead(id){
       verInforme(id);
     }
   }catch(e){ alert('⚠️ '+(e.message||'Error al auditar')); }
+}
+let monitorTimer=null;
+async function llamarBot(id){
+  const l=LEADS.find(x=>x.id===id);
+  if(!l) return;
+  const esCliente=l.estado==='cliente';
+  if(!confirm('🤖 ¿Lanzar llamada del bot (Alba) a "'+l.nombre+'" AHORA?\n\n'+(esCliente?'Es cliente: se llamará directamente.':'Solo se llamará si tiene consentimiento registrado (respondió LLÁMAME). Si no, el bot lo bloqueará.'))) return;
+  const box=document.getElementById('monitor');
+  box.style.display='block';
+  box.innerHTML='🤖 Preparando llamada a <b>'+l.nombre+'</b>…';
+  try{
+    const r=await api('/api/lead/'+id+'/llamar-sonar',{method:'POST'});
+    if(!r.ok){
+      const motivos={sin_consentimiento:'⛔ Sin consentimiento: necesita LLÁMAME o ser cliente (art. 66 LGT)',optout:'⛔ Este número pidió no recibir llamadas',fuera_de_ventana_horaria:'⏰ Fuera de la ventana de llamadas ('+(r.detalle||'L-V 10:00-19:30')+')',sin_telefono:'⛔ El lead no tiene teléfono',excluido:'⛔ Lead dado de baja'};
+      box.innerHTML=(motivos[r.motivo]||('⚠️ No se pudo llamar: '+(r.detalle||r.motivo||'error')))+' <span style="cursor:pointer;float:right" onclick="cerrarMonitor()">✕</span>';
+      return;
+    }
+    monitorizar(r.call_id, l.nombre);
+  }catch(e){
+    box.innerHTML='⚠️ '+(e.message||'Error lanzando la llamada')+' <span style="cursor:pointer;float:right" onclick="cerrarMonitor()">✕</span>';
+  }
+}
+function cerrarMonitor(){
+  document.getElementById('monitor').style.display='none';
+  if(monitorTimer){ clearInterval(monitorTimer); monitorTimer=null; }
+}
+function monitorizar(callId,nombre){
+  const box=document.getElementById('monitor');
+  const link='https://dashboard.retellai.com/call-history?history='+callId;
+  const estadosTxt={iniciando:'📡 Iniciando…',iniciada:'📡 Marcando…',en_curso:'🔊 EN LLAMADA (escúchala en vivo en Retell)',finalizada:'⏳ Colgó — analizando resultado…',analizada:'✅ Analizada'};
+  box.style.display='block';
+  box.innerHTML='🤖 Llamando a <b>'+nombre+'</b> · <span id="mon_estado">📡 Iniciando…</span> · <a href="'+link+'" target="_blank" style="color:var(--gold)">Ver/escuchar en Retell →</a> <span style="cursor:pointer;float:right" onclick="cerrarMonitor()">✕</span>';
+  if(monitorTimer) clearInterval(monitorTimer);
+  let n=0;
+  monitorTimer=setInterval(async()=>{
+    n++;
+    try{
+      const s=await api('/api/sonar/llamada/'+callId);
+      const est=s.estado||'iniciando';
+      document.getElementById('mon_estado').textContent=estadosTxt[est]||est;
+      if(est==='analizada'||n>72){
+        clearInterval(monitorTimer); monitorTimer=null;
+        const resNombres={cita_agendada:'📅 CITA AGENDADA',volver_a_llamar:'↻ Volver a llamar',enviar_email:'✉ Pidió email',no_interesado:'✗ No interesado',numero_equivocado:'☎ Nº equivocado',no_llamar:'🚫 No llamar más'};
+        box.innerHTML='🤖 Llamada a <b>'+nombre+'</b> terminada → <b style="color:var(--gold)">'+(resNombres[s.resultado]||s.resultado||'sin resultado')+'</b> · <a href="'+link+'" target="_blank" style="color:var(--gold)">Transcripción y audio →</a> <span style="cursor:pointer;float:right" onclick="cerrarMonitor()">✕</span>';
+        cargar();
+      }
+    }catch(e){}
+  },5000);
 }
 let gestionId=null;
 function gestionLead(id){
@@ -1587,3 +1637,71 @@ def api_sonar_lote(limite: int = 100, incluir_clientes: int = 1,
             "estado_radar": lead.get("estado"),
         })
     return salida
+
+
+# ---------------------------------------------------------------------
+# Llamada bajo demanda desde el panel (botón 🤖 Bot) + monitorización
+# ---------------------------------------------------------------------
+import httpx as _httpx
+
+SONAR_URL = os.getenv("SONAR_URL", "").rstrip("/")
+SONAR_API_KEY = os.getenv("SONAR_API_KEY", "")
+
+
+def _sonar_configurado() -> bool:
+    return bool(SONAR_URL and SONAR_API_KEY)
+
+
+@app.post("/api/lead/{lead_id}/llamar-sonar")
+def api_llamar_sonar(lead_id: int, x_api_key: str | None = Header(default=None)):
+    """Lanza AHORA una llamada del bot (KD Sonar / Alba) a este lead.
+
+    El gate legal vive en Sonar: solo llamará si hay consentimiento
+    (cliente o LLÁMAME) y dentro de la ventana horaria. Aquí solo
+    preparamos los datos frescos del lead y transmitimos la orden.
+    """
+    verificar(x_api_key)
+    if not _sonar_configurado():
+        raise HTTPException(400, "Faltan SONAR_URL / SONAR_API_KEY en Railway (servicio KD Radar)")
+    with conexion() as con:
+        f = con.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone()
+    if not f:
+        raise HTTPException(404, "Lead no encontrado")
+    lead = dict(f)
+    if not (lead.get("telefono") or "").strip():
+        return {"ok": False, "motivo": "sin_telefono"}
+    if lead.get("estado") == "excluido":
+        return {"ok": False, "motivo": "excluido"}
+    payload = {
+        "telefono": lead["telefono"],
+        "empresa": lead.get("nombre") or "",
+        "contacto": "",
+        "sector": lead.get("nicho") or "",
+        "puntos_dolor": _puntos_dolor_texto(lead),
+        "email": lead.get("email") or "",
+        "consent": 1 if lead.get("estado") == "cliente" else 0,
+    }
+    try:
+        r = _httpx.post(f"{SONAR_URL}/calls/lead", json=payload,
+                        headers={"X-API-Key": SONAR_API_KEY}, timeout=25)
+    except _httpx.HTTPError as e:
+        raise HTTPException(502, f"No se pudo contactar con KD Sonar: {e}")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"KD Sonar {r.status_code}: {r.text[:200]}")
+    return r.json()
+
+
+@app.get("/api/sonar/llamada/{call_id}")
+def api_estado_llamada(call_id: str, x_api_key: str | None = Header(default=None)):
+    """Estado en vivo de una llamada del bot (proxy a KD Sonar para el panel)."""
+    verificar(x_api_key)
+    if not _sonar_configurado():
+        raise HTTPException(400, "Faltan SONAR_URL / SONAR_API_KEY")
+    try:
+        r = _httpx.get(f"{SONAR_URL}/calls/{call_id}",
+                       headers={"X-API-Key": SONAR_API_KEY}, timeout=15)
+    except _httpx.HTTPError as e:
+        raise HTTPException(502, f"No se pudo contactar con KD Sonar: {e}")
+    if r.status_code >= 400:
+        raise HTTPException(502, f"KD Sonar {r.status_code}: {r.text[:200]}")
+    return r.json()
