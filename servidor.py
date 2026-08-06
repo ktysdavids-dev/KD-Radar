@@ -1204,7 +1204,7 @@ async function llamarBot(id){
   const l=LEADS.find(x=>x.id===id);
   if(!l) return;
   const esCliente=l.estado==='cliente';
-  if(!confirm('🤖 ¿Lanzar llamada del bot (Alba) a "'+l.nombre+'" AHORA?\n\n'+(esCliente?'Es cliente: se llamará directamente.':'Solo se llamará si tiene consentimiento registrado (respondió LLÁMAME). Si no, el bot lo bloqueará.'))) return;
+  if(!confirm('🤖 ¿Lanzar llamada del bot (Alba) a "'+l.nombre+'" AHORA?\\n\\n'+(esCliente?'Es cliente: se llamará directamente.':'Solo se llamará si tiene consentimiento registrado (respondió LLÁMAME). Si no, el bot lo bloqueará.'))) return;
   const box=document.getElementById('monitor');
   box.style.display='block';
   box.innerHTML='🤖 Preparando llamada a <b>'+l.nombre+'</b>…';
