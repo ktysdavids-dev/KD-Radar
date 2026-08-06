@@ -475,7 +475,8 @@ def api_leads(x_api_key: str | None = Header(default=None)):
             """SELECT id, nombre, nicho, municipio, provincia, telefono, email,
                       web, rating, num_resenas, estado, email_abierto,
                       visito_informe, llamado, notas, recordatorio,
-                      resultado_llamada, token_baja, actualizado_en
+                      resultado_llamada, token_baja,
+                      auditoria, pain_points, actualizado_en
                FROM leads ORDER BY
                  CASE WHEN visito_informe IS NOT NULL THEN 0
                       WHEN email_abierto IS NOT NULL THEN 1 ELSE 2 END,
@@ -484,9 +485,16 @@ def api_leads(x_api_key: str | None = Header(default=None)):
         for f in filas:
             d = dict(f)
             d["whatsapp_url"] = _whatsapp_url(d)
-            # ¿tiene informe generado? (auditado con puntos de dolor)
-            d["tiene_informe"] = bool(d.get("estado") in ("auditado", "redactado",
-                                       "enviado", "respondido", "cliente"))
+            # ¿tiene informe? Sí si fue auditado (tiene auditoría o puntos de dolor).
+            # Esto funciona para leads con o sin email (antes fallaba con solo tel).
+            tiene_aud = bool((d.get("auditoria") or "").strip()
+                             and (d.get("auditoria") or "").strip() not in ("null", "{}", "[]"))
+            tiene_pain = bool((d.get("pain_points") or "").strip()
+                              and (d.get("pain_points") or "").strip() not in ("null", "[]"))
+            d["tiene_informe"] = tiene_aud or tiene_pain
+            # No exponer los datos crudos de auditoría en el listado (pesan mucho)
+            d.pop("auditoria", None)
+            d.pop("pain_points", None)
             d.pop("token_baja", None)
             resultado.append(d)
         return resultado
@@ -1183,8 +1191,10 @@ async function auditarLead(id){
   if(!confirm(conWeb?'¿Analizar la web de "'+l.nombre+'" y generar su informe con puntos de dolor?':'Este lead no tiene web. ¿Generar un informe con los puntos de dolor típicos de su sector? (Puedes añadir su web con el botón ✎ para un análisis más preciso)')) return;
   try{
     const r=await api('/api/lead/'+id+'/auditar',{method:'POST'});
-    alert('✅ '+r.mensaje);
     await cargar();
+    if(confirm('✅ '+r.mensaje+'\\n\\n¿Quieres ver el informe ahora?')){
+      verInforme(id);
+    }
   }catch(e){ alert('⚠️ '+(e.message||'Error al auditar')); }
 }
 let gestionId=null;
