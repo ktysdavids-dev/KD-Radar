@@ -476,7 +476,7 @@ def api_leads(x_api_key: str | None = Header(default=None)):
                       web, rating, num_resenas, estado, email_abierto,
                       visito_informe, llamado, notas, recordatorio,
                       resultado_llamada, token_baja,
-                      consentimiento, consent_fuente, cita_texto,
+                      consentimiento, consent_fuente, cita_texto, cita_lugar, direccion,
                       auditoria, pain_points, actualizado_en
                FROM leads ORDER BY
                  CASE WHEN visito_informe IS NOT NULL THEN 0
@@ -650,6 +650,8 @@ def api_gestion(lead_id: int, datos: dict,
         campos["recordatorio"] = (datos["recordatorio"] or "").strip() or None
     if "cita_texto" in datos:
         campos["cita_texto"] = (datos["cita_texto"] or "").strip() or None
+    if "cita_lugar" in datos:
+        campos["cita_lugar"] = (datos["cita_lugar"] or "").strip() or None
     if "marcar_llamado" in datos:
         campos["llamado"] = ahora() if datos["marcar_llamado"] else None
     if not campos:
@@ -964,6 +966,8 @@ a{color:var(--gold2)}
 
       <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">📅 CITA — día y franja acordados (si hay cita)</label>
       <input id="g_cita" placeholder="Ej: miércoles por la tarde, sobre las 17:00" style="width:100%;margin:6px 0 14px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit">
+      <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">📍 LUGAR — dirección confirmada de la visita</label>
+      <input id="g_lugar" placeholder="Ej: en su local, C/ Mayor 12, Gandía" style="width:100%;margin:6px 0 14px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit">
       <label style="color:var(--mut);font-size:12px;letter-spacing:.5px">⏰ RECORDATORIO — ¿cuándo vuelvo a llamar?</label>
       <input id="g_recordatorio" type="datetime-local" style="width:100%;margin:6px 0 6px 0;background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:10px 12px;font-family:inherit">
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
@@ -1127,7 +1131,7 @@ function chips(l){
   const resNames={contactado:'✓ Contactado',no_contesta:'No contesta',volver_llamar:'↻ Rellamar',no_interesado:'✗ No interesa',cita_agendada:'📅 Cita agendada',buzon:'Buzón',no_llamar:'🚫 No llamar',enviar_email:'✉ Pidió email',numero_equivocado:'☎ Nº equivocado'};
   if(l.resultado_llamada && resNames[l.resultado_llamada]) h+=`<span class="chip" style="background:#2a2438;color:#c4a8e0">${resNames[l.resultado_llamada]}</span>`;
   if(l.llamado) h+='<span class="chip" style="background:#3d2a1a;color:#e0a585">📞 Llamado</span>';
-  if(l.resultado_llamada==='cita_agendada') h+=`<span class="chip" style="background:#3a2b06;color:var(--gold);border:1px solid var(--gold2)">📅 CITA${l.cita_texto?': '+l.cita_texto:''}</span>`;
+  if(l.resultado_llamada==='cita_agendada') h+=`<span class="chip" style="background:#3a2b06;color:var(--gold);border:1px solid var(--gold2)">📅 CITA${l.cita_texto?': '+l.cita_texto:''}${l.cita_lugar?' · 📍 '+l.cita_lugar:''}</span>`;
   if(l.consentimiento) h+='<span class="chip" style="background:#0d3320;color:#7bd99a;border:1px solid #2a5a3a">📞✔ Permiso bot</span>';
   if(tieneEmail(l)) h+='<span class="chip c-mail">✉ Email</span>';
   else if(tieneTel(l)) h+='<span class="chip c-tel">📱 Tel</span>';
@@ -1297,6 +1301,7 @@ function gestionLead(id){
   document.getElementById('g_resultado').value=l.resultado_llamada||'';
   document.getElementById('g_notas').value=l.notas||'';
   document.getElementById('g_cita').value=l.cita_texto||'';
+  document.getElementById('g_lugar').value=l.cita_lugar||([l.direccion,l.municipio].filter(Boolean).join(', '));
   // recordatorio: convertir ISO a formato datetime-local (sin segundos ni Z)
   document.getElementById('g_recordatorio').value=l.recordatorio ? l.recordatorio.slice(0,16) : '';
   document.getElementById('g_err').textContent='';
@@ -1315,6 +1320,7 @@ async function guardarGestion(){
     resultado:document.getElementById('g_resultado').value,
     notas:document.getElementById('g_notas').value,
     cita_texto:document.getElementById('g_cita').value,
+    cita_lugar:document.getElementById('g_lugar').value,
     recordatorio:document.getElementById('g_recordatorio').value,
   };
   try{
@@ -1498,7 +1504,7 @@ def _puntos_dolor_texto(lead: dict, maximo: int = 3, tope_chars: int = 420) -> s
 
 
 def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
-                              email_destino: str) -> str:
+                              email_destino: str, lugar: str = "") -> str:
     """Envía el email de confirmación de la visita. Devuelve 'enviado' o el error."""
     if not SMTP_PASS:
         return "sin_smtp_configurado"
@@ -1506,6 +1512,7 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
         return "sin_email"
     nombre = lead.get("nombre") or "su negocio"
     fecha = (fecha_texto or "").strip() or "en la fecha acordada por teléfono"
+    lugar = (lugar or "").strip()
     baja = (f'{BASE_URL}/baja/{lead["token_baja"]}'
             if lead.get("token_baja") else "")
     texto = (
@@ -1527,7 +1534,7 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
       <p style="margin:0 0 14px">Le confirmamos la visita de <strong>David Amundarain</strong>
       ({REMITENTE_NOMBRE}) a <strong>{nombre}</strong>:</p>
       <p style="margin:0 0 18px;background:#f4eede;border-left:4px solid #cda450;padding:12px 16px;font-size:16px">
-        <strong>{fecha}</strong></p>
+        <strong>{fecha}</strong>{('<br><span style="font-size:14px">&#128205; ' + lugar + '</span>') if lugar else ''}</p>
       <p style="margin:0 0 14px">Es una visita informativa breve (20&ndash;30 minutos),
       sin coste y sin compromiso, para ense&ntilde;arle lo detectado en la
       revisi&oacute;n digital de su negocio.</p>
@@ -1589,6 +1596,7 @@ def api_sonar_resultado(datos: dict,
     resultado_radar = _MAPA_RESULTADO_SONAR.get(resultado_sonar, "contactado")
 
     fecha_cita = (datos.get("fecha_cita_texto") or "").strip()
+    lugar_confirmado = (datos.get("direccion_confirmada") or "").strip()
     email_dictado = (datos.get("email_confirmado") or "").strip().lower()
     notas_sonar = (datos.get("notas") or "").strip()
     call_id = (datos.get("call_id") or "").strip()
@@ -1597,6 +1605,8 @@ def api_sonar_resultado(datos: dict,
     partes = [f"[Sonar {ahora()[:16]}] {resultado_radar}"]
     if fecha_cita:
         partes.append(f"Cita: {fecha_cita}")
+    if lugar_confirmado:
+        partes.append(f"Lugar: {lugar_confirmado}")
     if email_dictado:
         partes.append(f"Email en llamada: {email_dictado}")
     if notas_sonar:
@@ -1611,8 +1621,13 @@ def api_sonar_resultado(datos: dict,
         "llamado": ahora(),
         "notas": notas_total,
     }
-    if resultado_radar == "cita_agendada" and fecha_cita:
-        campos["cita_texto"] = fecha_cita
+    if resultado_radar == "cita_agendada":
+        if fecha_cita:
+            campos["cita_texto"] = fecha_cita
+        campos["cita_lugar"] = (lugar_confirmado
+                                or ", ".join(x for x in [lead.get("direccion"),
+                                                         lead.get("municipio")] if x)
+                                or None)
     # Si el lead no tenía email y el bot capturó uno, lo guardamos
     if email_dictado and "@" in email_dictado and not (lead.get("email") or "").strip():
         campos["email"] = email_dictado
@@ -1624,7 +1639,8 @@ def api_sonar_resultado(datos: dict,
             excluir_email(lead["email"], motivo="no_llamar_telefono")
     elif resultado_radar == "cita_agendada":
         destino = (campos.get("email") or lead.get("email") or "").strip()
-        email_confirmacion = _enviar_confirmacion_cita(lead, fecha_cita, destino)
+        email_confirmacion = _enviar_confirmacion_cita(
+            lead, fecha_cita, destino, campos.get("cita_lugar") or "")
 
     actualizar_lead(lead["id"], **campos)
     return {
@@ -1681,6 +1697,7 @@ def api_sonar_lote(limite: int = 100, incluir_clientes: int = 1,
             "email": lead.get("email") or "",
             "sector": lead.get("nicho") or "",
             "municipio": lead.get("municipio") or "",
+            "direccion": ", ".join(x for x in [lead.get("direccion"), lead.get("municipio")] if x),
             "puntos_dolor": _puntos_dolor_texto(lead),
             "consent": 1 if con_permiso else 0,
             "consent_source": ("cliente_actual" if es_cliente
@@ -1731,6 +1748,7 @@ def api_llamar_sonar(lead_id: int, x_api_key: str | None = Header(default=None))
         "sector": lead.get("nicho") or "",
         "puntos_dolor": _puntos_dolor_texto(lead),
         "email": lead.get("email") or "",
+        "direccion": ", ".join(x for x in [lead.get("direccion"), lead.get("municipio")] if x),
         "consent": 1 if (lead.get("estado") == "cliente"
                          or lead.get("consentimiento") == 1) else 0,
     }
@@ -1779,6 +1797,8 @@ def _migrar_consentimiento():
             con.execute("ALTER TABLE leads ADD COLUMN consent_fecha TEXT")
         if "cita_texto" not in cols:
             con.execute("ALTER TABLE leads ADD COLUMN cita_texto TEXT")
+        if "cita_lugar" not in cols:
+            con.execute("ALTER TABLE leads ADD COLUMN cita_lugar TEXT")
 
 
 _migrar_consentimiento()
