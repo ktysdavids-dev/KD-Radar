@@ -1845,3 +1845,137 @@ def api_consentimiento(lead_id: int, datos: dict,
     sonar = _sync_consent_sonar(lead["telefono"], valor, fuente)
     return {"ok": True, "lead_id": lead_id, "consentimiento": valor,
             "fuente": fuente, "sonar": sonar}
+
+
+@app.post("/api/consentimiento/por-email")
+def api_consentimiento_por_email(datos: dict,
+                                 x_api_key: str | None = Header(default=None)):
+    """Registra el permiso de llamada cuando un lead responde LLÁMAME al email.
+
+    Pensado para n8n (trigger IMAP del buzón IONOS): acepta el remitente tal
+    cual llega ("Nombre <correo@dominio.es>" o el correo a secas), localiza el
+    lead por email, registra el permiso con origen 'respuesta_llamame' y lo
+    sincroniza con KD Sonar. Idempotente: repetir no duplica nada.
+    """
+    verificar(x_api_key)
+    import re as _re
+    bruto = (datos.get("email") or "").strip()
+    m = _re.search(r"[\w\.\-\+]+@[\w\.\-]+\.\w+", bruto)
+    if not m:
+        raise HTTPException(400, "No se encontró un email válido en 'email'")
+    correo = m.group(0).lower()
+    with conexion() as con:
+        f = con.execute(
+            "SELECT * FROM leads WHERE LOWER(email)=? ORDER BY id LIMIT 1",
+            (correo,),
+        ).fetchone()
+    if not f:
+        return {"ok": False, "motivo": "lead_no_encontrado", "email": correo}
+    lead = dict(f)
+    if lead.get("estado") == "excluido":
+        return {"ok": False, "motivo": "excluido", "email": correo}
+    if not (lead.get("telefono") or "").strip():
+        return {"ok": False, "motivo": "sin_telefono", "email": correo,
+                "lead_id": lead["id"]}
+    _conceder_permiso(lead["id"], True, "respuesta_llamame")
+    sonar = _sync_consent_sonar(lead["telefono"], True, "respuesta_llamame")
+    return {"ok": True, "lead_id": lead["id"], "email": correo,
+            "telefono": lead["telefono"], "sonar": sonar}
+
+
+@app.post("/api/reactivar-abridores")
+def api_reactivar_abridores(datos: dict | None = None,
+                            x_api_key: str | None = Header(default=None)):
+    """Palanca 2: email de reactivación con CTA LLÁMAME a los que ABRIERON el
+    email o VIERON su informe y aún no han respondido.
+
+    - Solo leads en estado 'enviado' (recibieron el email original), con email,
+      no excluidos y sin permiso ya registrado.
+    - Cada lead recibe esta reactivación UNA sola vez (dedupe por la tabla de
+      envíos, campaña 'reactivacion-llamame').
+    - El que responda LLÁMAME entra solo por el flujo de n8n: permiso + llamada.
+    """
+    verificar(x_api_key)
+    if not SMTP_PASS:
+        raise HTTPException(400, "Falta configurar SMTP_PASS en Railway")
+    limite = 20
+    if isinstance(datos, dict):
+        try:
+            limite = max(1, min(int(datos.get("limite", 20)), 100))
+        except (TypeError, ValueError):
+            limite = 20
+    with conexion() as con:
+        filas = con.execute(
+            """SELECT * FROM leads
+               WHERE estado = 'enviado'
+                 AND email IS NOT NULL AND email != ''
+                 AND (email_abierto = 1 OR visito_informe = 1)
+                 AND COALESCE(consentimiento, 0) = 0
+                 AND id NOT IN (SELECT lead_id FROM envios
+                                WHERE campana = 'reactivacion-llamame')
+               ORDER BY visito_informe DESC, email_abierto DESC, num_resenas DESC
+               LIMIT ?""",
+            (limite,),
+        ).fetchall()
+    enviados, errores = 0, []
+    for f in filas:
+        lead = dict(f)
+        nombre = lead.get("nombre") or "su negocio"
+        baja = (f'{BASE_URL}/baja/{lead["token_baja"]}'
+                if lead.get("token_baja") else "")
+        texto = (
+            f"Hola,\n\nHace unos días le enviamos el análisis digital de "
+            f"{nombre} y hemos visto que le echó un vistazo.\n\n"
+            "Si quiere, se lo explicamos por teléfono en 3 minutos, sin ningún "
+            "compromiso: responda a este correo con la palabra LLÁMAME y le "
+            f"llamamos hoy mismo.\n\nUn saludo,\nDavíd Amundarain\n"
+            f"{REMITENTE_NOMBRE} · {REMITENTE_EMAIL}"
+        )
+        html = f"""\
+<div style="background:#f4eede;padding:32px 16px;font-family:Georgia,'Times New Roman',serif;color:#0c0905">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e6ddc9;border-radius:10px;overflow:hidden">
+    <div style="background:#0c0905;padding:20px 28px">
+      <span style="color:#cda450;font-size:20px;letter-spacing:.5px">Ktys &amp; Davids</span>
+    </div>
+    <div style="padding:28px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6">
+      <p style="margin:0 0 14px">Hola,</p>
+      <p style="margin:0 0 14px">Hace unos d&iacute;as le enviamos el an&aacute;lisis digital de
+      <strong>{nombre}</strong> y hemos visto que le ech&oacute; un vistazo.</p>
+      <p style="margin:0 0 18px">Si quiere, se lo explicamos por tel&eacute;fono en
+      <strong>3 minutos</strong>, sin ning&uacute;n compromiso:</p>
+      <p style="margin:0 0 18px;background:#f4eede;border-left:4px solid #cda450;padding:14px 16px;font-size:16px">
+        Responda a este correo con la palabra <strong>LL&Aacute;MAME</strong>
+        y le llamamos hoy mismo.</p>
+      <p style="margin:22px 0 0">Un saludo,<br><strong>Dav&iacute;d Amundarain</strong><br>
+      {REMITENTE_NOMBRE} &middot; <a href="mailto:{REMITENTE_EMAIL}" style="color:#0c0905">{REMITENTE_EMAIL}</a></p>
+    </div>
+    <div style="padding:14px 28px;background:#faf6ec;border-top:1px solid #e6ddc9;
+                font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#8a8272">
+      Ktys &amp; Davids Productions S.L.
+      {('&middot; <a href="' + baja + '" style="color:#8a8272">No deseo recibir m&aacute;s correos</a>') if baja else ''}
+    </div>
+  </div>
+</div>"""
+        try:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = f"¿Se lo explicamos en 3 minutos? — {nombre}"
+            msg["From"] = f"{REMITENTE_NOMBRE} <{REMITENTE_EMAIL}>"
+            msg["To"] = lead["email"]
+            msg["Reply-To"] = REMITENTE_EMAIL
+            msg.attach(MIMEText(texto, "plain", "utf-8"))
+            msg.attach(MIMEText(html, "html", "utf-8"))
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+                s.starttls()
+                s.login(SMTP_USER, SMTP_PASS)
+                s.send_message(msg)
+        except Exception as e:  # noqa: BLE001
+            errores.append({"lead_id": lead["id"], "error": f"{type(e).__name__}"})
+            continue
+        with conexion() as con:
+            con.execute(
+                "INSERT INTO envios (lead_id, asunto, campana, fecha) VALUES (?,?,?,?)",
+                (lead["id"], "Reactivación LLÁMAME", "reactivacion-llamame", ahora()),
+            )
+        enviados += 1
+    return {"ok": True, "candidatos": len(filas), "enviados": enviados,
+            "errores": errores}
