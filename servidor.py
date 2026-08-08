@@ -29,6 +29,24 @@ from fastapi.responses import HTMLResponse, Response
 
 from config import (LOTE_DIARIO, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
                     REMITENTE_NOMBRE, REMITENTE_EMAIL, BASE_URL)
+
+def _smtp_enviar(msg) -> None:
+    """Envía un mensaje por SMTP eligiendo el modo según el puerto.
+    465 -> SSL directo (recomendado por IONOS). 587 -> STARTTLS.
+    Timeout amplio para redes lentas."""
+    import ssl as _ssl
+    ctx = _ssl.create_default_context()
+    if int(SMTP_PORT) == 465:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30, context=ctx) as s:
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as s:
+            s.ehlo()
+            s.starttls(context=ctx)
+            s.login(SMTP_USER, SMTP_PASS)
+            s.send_message(msg)
+
 from db import (init_db, conexion, lote_para_envio, actualizar_lead,
                 excluir_email, stats, stats_por_nicho, ahora)
 from motor import ejecutar_prospeccion, estado_motor, siguientes_combos
@@ -710,10 +728,7 @@ def api_enviar_directo(lead_id: int, x_api_key: str | None = Header(default=None
         if lead.get("email_cuerpo"):
             msg.attach(MIMEText(lead["email_cuerpo"], "plain", "utf-8"))
         msg.attach(MIMEText(cuerpo_html, "html", "utf-8"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-            s.starttls()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
+        _smtp_enviar(msg)
     except Exception as e:
         raise HTTPException(502, f"Error enviando: {type(e).__name__}: {e}")
     actualizar_lead(lead_id, estado="enviado")
@@ -1623,10 +1638,7 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
         msg["Reply-To"] = REMITENTE_EMAIL
         msg.attach(MIMEText(texto, "plain", "utf-8"))
         msg.attach(MIMEText(html, "html", "utf-8"))
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-            s.starttls()
-            s.login(SMTP_USER, SMTP_PASS)
-            s.send_message(msg)
+        _smtp_enviar(msg)
     except Exception as e:  # noqa: BLE001
         return f"error: {type(e).__name__}: {e}"
     with conexion() as con:
@@ -2031,10 +2043,7 @@ def api_reactivar_abridores(datos: dict | None = None,
             msg["Reply-To"] = REMITENTE_EMAIL
             msg.attach(MIMEText(texto, "plain", "utf-8"))
             msg.attach(MIMEText(html, "html", "utf-8"))
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-                s.starttls()
-                s.login(SMTP_USER, SMTP_PASS)
-                s.send_message(msg)
+            _smtp_enviar(msg)
         except Exception as e:  # noqa: BLE001
             errores.append({"lead_id": lead["id"], "error": f"{type(e).__name__}"})
             continue
