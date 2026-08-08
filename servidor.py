@@ -1505,7 +1505,7 @@ def _puntos_dolor_texto(lead: dict, maximo: int = 3, tope_chars: int = 420) -> s
 
 def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
                               email_destino: str, lugar: str = "",
-                              resumen: str = "") -> str:
+                              resumen: str = "", nombre_contacto: str = "") -> str:
     """Envía el email de confirmación de la visita. Devuelve 'enviado' o el error."""
     if not SMTP_PASS:
         return "sin_smtp_configurado"
@@ -1535,35 +1535,86 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
         + "Si necesita cambiar el día o la hora, responda a este "
         f"correo.\n\nUn saludo,\n{REMITENTE_NOMBRE}\n{REMITENTE_EMAIL}"
     )
+    logo_url = "https://cdn.prod.website-files.com/68b944d4a42f90c19d14a5da/68b9453bf437128b66626346_Logo%20normal.jpeg"
+    url_informe = f"{BASE_URL}/informe/{lead['token_baja']}" if lead.get("token_baja") else ""
+    _saludo_nombre = (nombre_contacto or "").strip()
+    _hola = f"Hola {_saludo_nombre}," if _saludo_nombre else "Hola,"
+    _bloque_resumen = (
+        f'''<tr><td style="padding:0 32px 8px">
+          <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;letter-spacing:1.5px;color:#b9932f;text-transform:uppercase;font-weight:bold;margin-bottom:8px">Resumen de la llamada</div>
+          <div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.65;color:#4a453d;background:#faf6ec;border-radius:10px;padding:16px 18px">{resumen}</div>
+        </td></tr>''' if resumen else ""
+    )
+    _items_dolor = "".join(
+        f'<tr><td style="padding:3px 0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#4a453d;line-height:1.5"><span style="color:#cda450;font-weight:bold;margin-right:8px">&#10003;</span>{d}</td></tr>'
+        for d in _dolores
+    )
+    _bloque_dolor = (
+        f'''<tr><td style="padding:20px 32px 8px">
+          <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;letter-spacing:1.5px;color:#b9932f;text-transform:uppercase;font-weight:bold;margin-bottom:10px">Lo que Dav&iacute;d repasar&aacute; con usted</div>
+          <table role="presentation" cellpadding="0" cellspacing="0" width="100%">{_items_dolor}</table>
+        </td></tr>''' if _dolores else ""
+    )
+    _bloque_boton = (
+        f'''<tr><td align="center" style="padding:24px 32px 8px">
+          <a href="{url_informe}" target="_blank" style="display:inline-block;background:#cda450;color:#0c0905;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;text-decoration:none;padding:15px 32px;border-radius:10px;letter-spacing:.3px">Ver el an&aacute;lisis completo de mi negocio &rarr;</a>
+        </td></tr>''' if url_informe else ""
+    )
+    _linea_lugar = (f'<div style="font-family:Arial,Helvetica,sans-serif;font-size:15px;color:#3a3630;margin-top:6px">&#128205;&nbsp; {lugar}</div>' if lugar else "")
     html = f"""\
-<div style="background:#f4eede;padding:32px 16px;font-family:Georgia,'Times New Roman',serif;color:#0c0905">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e6ddc9;border-radius:10px;overflow:hidden">
-    <div style="background:#0c0905;padding:20px 28px">
-      <span style="color:#cda450;font-size:20px;letter-spacing:.5px">Ktys &amp; Davids</span>
-    </div>
-    <div style="padding:28px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6">
-      <p style="margin:0 0 14px">Hola,</p>
-      <p style="margin:0 0 14px">Le confirmamos la visita de <strong>David Amundarain</strong>
-      ({REMITENTE_NOMBRE}) a <strong>{nombre}</strong>:</p>
-      <p style="margin:0 0 18px;background:#f4eede;border-left:4px solid #cda450;padding:12px 16px;font-size:16px">
-        <strong>{fecha}</strong>{('<br><span style="font-size:14px">&#128205; ' + lugar + '</span>') if lugar else ''}</p>
-      <p style="margin:0 0 14px">Es una visita informativa breve (20&ndash;30 minutos),
-      sin coste y sin compromiso, para ense&ntilde;arle lo detectado en la
-      revisi&oacute;n digital de su negocio.</p>
-      {('<div style="margin:0 0 16px;padding:14px 16px;background:#faf6ec;border-radius:8px"><div style="font-size:12px;letter-spacing:.5px;color:#8a8272;text-transform:uppercase;margin-bottom:6px">Resumen de la llamada</div><div style="font-size:14px;color:#3a3630">' + resumen + '</div></div>') if resumen else ''}
-      {('<div style="margin:0 0 16px"><div style="font-size:12px;letter-spacing:.5px;color:#8a8272;text-transform:uppercase;margin-bottom:8px">Puntos que Dav&iacute;d repasar&aacute; en la visita</div><ul style="margin:0;padding-left:18px;font-size:14px;color:#3a3630;line-height:1.7">' + ''.join('<li>' + d + '</li>' for d in _dolores) + '</ul></div>') if _dolores else ''}
-      <p style="margin:0 0 14px">Si necesita cambiar el d&iacute;a o la hora,
-      responda a este correo.</p>
-      <p style="margin:22px 0 0">Un saludo,<br><strong>{REMITENTE_NOMBRE}</strong><br>
-      <a href="mailto:{REMITENTE_EMAIL}" style="color:#0c0905">{REMITENTE_EMAIL}</a></p>
-    </div>
-    <div style="padding:14px 28px;background:#faf6ec;border-top:1px solid #e6ddc9;
-                font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#8a8272">
-      Ktys &amp; Davids Productions S.L.
-      {('&middot; <a href="' + baja + '" style="color:#8a8272">No deseo recibir m&aacute;s correos</a>') if baja else ''}
-    </div>
-  </div>
-</div>"""
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#eae3d3">
+<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#eae3d3;padding:28px 12px">
+  <tr><td align="center">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(12,9,5,.10)">
+      <tr><td align="center" style="background:#0c0905;padding:30px 32px 26px">
+        <img src="{logo_url}" alt="Ktys &amp; Davids Productions" width="150" style="display:block;width:150px;max-width:60%;height:auto;border:0;border-radius:8px">
+      </td></tr>
+      <tr><td style="height:4px;background:linear-gradient(90deg,#cda450,#eccd82,#cda450)"></td></tr>
+      <tr><td style="padding:32px 32px 6px">
+        <p style="margin:0 0 6px;font-family:Arial,Helvetica,sans-serif;font-size:16px;color:#0c0905">{_hola}</p>
+        <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:22px;line-height:1.35;color:#0c0905">Su visita con <strong style="color:#a37c1e">Dav&iacute;d</strong> queda confirmada</p>
+      </td></tr>
+      <tr><td style="padding:18px 32px 6px">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#0c0905;border-radius:12px">
+          <tr><td style="padding:20px 24px">
+            <div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;letter-spacing:1.5px;color:#cda450;text-transform:uppercase;font-weight:bold;margin-bottom:8px">Cita confirmada</div>
+            <div style="font-family:Georgia,'Times New Roman',serif;font-size:21px;color:#f4eede;font-weight:bold">&#128197;&nbsp; {fecha}</div>
+            {(_linea_lugar.replace('#3a3630','#d8cfba')) if lugar else ''}
+          </td></tr>
+        </table>
+      </td></tr>
+      <tr><td style="padding:18px 32px 6px">
+        <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.65;color:#4a453d">Es una visita informativa breve (20&ndash;30 minutos), <strong>sin coste y sin compromiso</strong>. Dav&iacute;d le llevar&aacute; el an&aacute;lisis de su negocio y le ense&ntilde;ar&aacute; en persona qu&eacute; puede mejorar para conseguir m&aacute;s clientes.</p>
+      </td></tr>
+      {_bloque_resumen}
+      {_bloque_boton}
+      {_bloque_dolor}
+      <tr><td style="padding:22px 32px 6px">
+        <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:#7a7468">&iquest;Necesita cambiar el d&iacute;a o la hora? Solo tiene que responder a este correo.</p>
+      </td></tr>
+      <tr><td style="padding:14px 32px 30px">
+        <p style="margin:0;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#3a3630">Un cordial saludo,<br><strong style="font-size:15px">Dav&iacute;d Amundarain</strong><br><span style="color:#7a7468">{REMITENTE_NOMBRE}</span></p>
+      </td></tr>
+      <tr><td style="background:#0c0905;padding:22px 32px">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>
+          <td style="font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#cda450;line-height:1.7">
+            <strong style="color:#eccd82;letter-spacing:1px">KTYS &amp; DAVIDS</strong> &middot; Productions S.L.<br>
+            <a href="https://www.ktysdavids.com" style="color:#b8b0a0;text-decoration:none">www.ktysdavids.com</a> &nbsp;&middot;&nbsp;
+            <a href="https://wa.me/34624577459" style="color:#b8b0a0;text-decoration:none">WhatsApp</a><br>
+            <span style="color:#6a6456;font-size:11px">CIF B16377574 &middot; Madrid, Espa&ntilde;a</span>
+          </td>
+        </tr></table>
+      </td></tr>
+      <tr><td style="background:#0a0704;padding:12px 32px;font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#6a6456;text-align:center">
+        Recibe este correo porque acord&oacute; una visita con nosotros.
+        {('&nbsp;&middot;&nbsp; <a href="' + baja + '" style="color:#8a8272;text-decoration:underline">No deseo recibir m&aacute;s correos</a>') if baja else ''}
+      </td></tr>
+    </table>
+  </td></tr>
+</table>
+</body></html>"""
     try:
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"Confirmación de su visita — {REMITENTE_NOMBRE}"
@@ -1611,6 +1662,7 @@ def api_sonar_resultado(datos: dict,
 
     fecha_cita = (datos.get("fecha_cita_texto") or "").strip()
     lugar_confirmado = (datos.get("direccion_confirmada") or "").strip()
+    nombre_contacto = (datos.get("nombre_contacto") or "").strip()
     email_dictado = (datos.get("email_confirmado") or "").strip().lower()
     notas_sonar = (datos.get("notas") or "").strip()
     call_id = (datos.get("call_id") or "").strip()
@@ -1655,7 +1707,7 @@ def api_sonar_resultado(datos: dict,
         destino = (campos.get("email") or lead.get("email") or "").strip()
         email_confirmacion = _enviar_confirmacion_cita(
             lead, fecha_cita, destino, campos.get("cita_lugar") or "",
-            resumen=notas_sonar)
+            resumen=notas_sonar, nombre_contacto=nombre_contacto)
 
     actualizar_lead(lead["id"], **campos)
     return {
