@@ -1504,7 +1504,8 @@ def _puntos_dolor_texto(lead: dict, maximo: int = 3, tope_chars: int = 420) -> s
 
 
 def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
-                              email_destino: str, lugar: str = "") -> str:
+                              email_destino: str, lugar: str = "",
+                              resumen: str = "") -> str:
     """Envía el email de confirmación de la visita. Devuelve 'enviado' o el error."""
     if not SMTP_PASS:
         return "sin_smtp_configurado"
@@ -1513,6 +1514,13 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
     nombre = lead.get("nombre") or "su negocio"
     fecha = (fecha_texto or "").strip() or "en la fecha acordada por teléfono"
     lugar = (lugar or "").strip()
+    resumen = (resumen or "").strip()
+    import json as _json
+    try:
+        _dolores = _json.loads(lead.get("pain_points") or "[]")
+    except (ValueError, TypeError):
+        _dolores = []
+    _dolores = [d for d in _dolores if isinstance(d, str) and d.strip()][:4]
     baja = (f'{BASE_URL}/baja/{lead["token_baja"]}'
             if lead.get("token_baja") else "")
     texto = (
@@ -1520,7 +1528,11 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
         f"({REMITENTE_NOMBRE}) a {nombre}: {fecha}.\n\n"
         "Es una visita informativa breve (20-30 minutos), sin coste y sin "
         "compromiso, para enseñarle lo detectado en la revisión digital de su "
-        "negocio.\n\nSi necesita cambiar el día o la hora, responda a este "
+        "negocio.\n\n"
+        + (("Resumen de nuestra conversación:\n" + resumen + "\n\n") if resumen else "")
+        + (("Algunos puntos que Davíd repasará con usted en la visita:\n- "
+            + "\n- ".join(_dolores) + "\n\n") if _dolores else "")
+        + "Si necesita cambiar el día o la hora, responda a este "
         f"correo.\n\nUn saludo,\n{REMITENTE_NOMBRE}\n{REMITENTE_EMAIL}"
     )
     html = f"""\
@@ -1538,6 +1550,8 @@ def _enviar_confirmacion_cita(lead: dict, fecha_texto: str,
       <p style="margin:0 0 14px">Es una visita informativa breve (20&ndash;30 minutos),
       sin coste y sin compromiso, para ense&ntilde;arle lo detectado en la
       revisi&oacute;n digital de su negocio.</p>
+      {('<div style="margin:0 0 16px;padding:14px 16px;background:#faf6ec;border-radius:8px"><div style="font-size:12px;letter-spacing:.5px;color:#8a8272;text-transform:uppercase;margin-bottom:6px">Resumen de la llamada</div><div style="font-size:14px;color:#3a3630">' + resumen + '</div></div>') if resumen else ''}
+      {('<div style="margin:0 0 16px"><div style="font-size:12px;letter-spacing:.5px;color:#8a8272;text-transform:uppercase;margin-bottom:8px">Puntos que Dav&iacute;d repasar&aacute; en la visita</div><ul style="margin:0;padding-left:18px;font-size:14px;color:#3a3630;line-height:1.7">' + ''.join('<li>' + d + '</li>' for d in _dolores) + '</ul></div>') if _dolores else ''}
       <p style="margin:0 0 14px">Si necesita cambiar el d&iacute;a o la hora,
       responda a este correo.</p>
       <p style="margin:22px 0 0">Un saludo,<br><strong>{REMITENTE_NOMBRE}</strong><br>
@@ -1640,7 +1654,8 @@ def api_sonar_resultado(datos: dict,
     elif resultado_radar == "cita_agendada":
         destino = (campos.get("email") or lead.get("email") or "").strip()
         email_confirmacion = _enviar_confirmacion_cita(
-            lead, fecha_cita, destino, campos.get("cita_lugar") or "")
+            lead, fecha_cita, destino, campos.get("cita_lugar") or "",
+            resumen=notas_sonar)
 
     actualizar_lead(lead["id"], **campos)
     return {
