@@ -21,6 +21,7 @@ Arranque Railway: uvicorn servidor:app --host 0.0.0.0 --port $PORT
 """
 import os
 import smtplib
+import httpx as _httpx
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -30,10 +31,55 @@ from fastapi.responses import HTMLResponse, Response
 from config import (LOTE_DIARIO, SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS,
                     REMITENTE_NOMBRE, REMITENTE_EMAIL, BASE_URL)
 
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+
+
 def _smtp_enviar(msg) -> None:
-    """Envía un mensaje por SMTP eligiendo el modo según el puerto.
-    465 -> SSL directo (recomendado por IONOS). 587 -> STARTTLS.
-    Timeout amplio para redes lentas."""
+    """Envía un email. Prioriza Resend (API HTTP, funciona en Railway).
+    Si no hay RESEND_API_KEY, cae a SMTP directo (para entornos que lo permitan).
+
+    Acepta un objeto MIMEMultipart('alternative') con partes text/plain y text/html.
+    Extrae destinatario, asunto y cuerpos y los envía por la API de Resend.
+    """
+    if RESEND_API_KEY:
+        # Extraer piezas del mensaje MIME ya construido
+        to_addr = msg["To"]
+        subject = msg["Subject"]
+        reply_to = msg["Reply-To"] or REMITENTE_EMAIL
+        html_body, text_body = "", ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                ct = part.get_content_type()
+                if ct == "text/html" and not html_body:
+                    html_body = part.get_payload(decode=True).decode("utf-8", "ignore")
+                elif ct == "text/plain" and not text_body:
+                    text_body = part.get_payload(decode=True).decode("utf-8", "ignore")
+        else:
+            text_body = msg.get_payload(decode=True).decode("utf-8", "ignore")
+
+        payload = {
+            "from": f"{REMITENTE_NOMBRE} <{REMITENTE_EMAIL}>",
+            "to": [to_addr],
+            "subject": subject,
+            "reply_to": reply_to,
+        }
+        if html_body:
+            payload["html"] = html_body
+        if text_body:
+            payload["text"] = text_body
+
+        resp = _httpx.post(
+            "https://api.resend.com/emails",
+            json=payload,
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}",
+                     "Content-Type": "application/json"},
+            timeout=20,
+        )
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Resend {resp.status_code}: {resp.text[:200]}")
+        return
+
+    # --- Fallback SMTP (si algún día se usa un entorno que permita SMTP saliente) ---
     import ssl as _ssl
     ctx = _ssl.create_default_context()
     if int(SMTP_PORT) == 465:
